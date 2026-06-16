@@ -7,9 +7,9 @@ the answer, and returns **citations + freshness** — tenant-isolated, guardrail
 observable, and eval-gated.
 
 ## Docs
-- 📐 [ARCHITECTURE.md](ARCHITECTURE.md) — full system, flow diagrams, end-to-end.
-- 🧠 [RAG_FUNDAMENTALS.md](RAG_FUNDAMENTALS.md) — the standalone study labs (chunking · embeddings · retrieval · evaluation · agents).
-- 🗺️ [VISION-6-TO-10.md](VISION-6-TO-10.md) — how it was built, hardening passes, roadmap.
+
+- 📐 [docs/ARCHITECTURE.md](ARCHITECTURE.md) — full system, flow diagrams, end-to-end.
+- 🧠 [docs/RAG_FUNDAMENTALS.md](RAG_FUNDAMENTALS.md) — the standalone study labs (chunking · embeddings · retrieval · evaluation · agents).
 - 🔬 [evals/README.md](evals/README.md) — the eval harness + CI gate.
 
 ## Quick start
@@ -64,20 +64,20 @@ curl -s $BASE/api/jobs/$JOB -H "Authorization: Bearer $TOKEN"
 
 ## API endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/auth/signup`, `/api/auth/login` | Get a bearer token (tenant-scoped) |
-| POST | `/api/upload` | Upload + index a PDF (auth; optional `family`/`version`) |
-| POST | `/api/ask`, `/api/ask/stream` | Ask (router + understanding + pipeline); SSE stream |
-| POST | `/api/ask/resume` | Resume a HITL-clarification run (`thread_id` + `answer`) |
-| POST | `/api/summarize`, `/api/summarize/async` | Map-reduce summary (sync / job) |
-| GET | `/api/jobs/{job_id}` | Poll an async job |
-| GET | `/api/versions` | List version chains (`?family=`) |
-| POST | `/api/index`, `/api/index/hybrid`, `/api/index/all` | Index a PDF already in storage |
-| GET | `/api/documents` | List the tenant's documents |
-| GET/POST | `/api/config` | View / switch active model·retrieval·embedding |
-| GET | `/api/tree`, `/api/page/{n}` | Document tree / raw page |
-| GET | `/api/health` | Health + counts |
+| Method   | Endpoint                                            | Description                                              |
+| -------- | --------------------------------------------------- | -------------------------------------------------------- |
+| POST     | `/api/auth/signup`, `/api/auth/login`               | Get a bearer token (tenant-scoped)                       |
+| POST     | `/api/upload`                                       | Upload + index a PDF (auth; optional `family`/`version`) |
+| POST     | `/api/ask`, `/api/ask/stream`                       | Ask (router + understanding + pipeline); SSE stream      |
+| POST     | `/api/ask/resume`                                   | Resume a HITL-clarification run (`thread_id` + `answer`) |
+| POST     | `/api/summarize`, `/api/summarize/async`            | Map-reduce summary (sync / job)                          |
+| GET      | `/api/jobs/{job_id}`                                | Poll an async job                                        |
+| GET      | `/api/versions`                                     | List version chains (`?family=`)                         |
+| POST     | `/api/index`, `/api/index/hybrid`, `/api/index/all` | Index a PDF already in storage                           |
+| GET      | `/api/documents`                                    | List the tenant's documents                              |
+| GET/POST | `/api/config`                                       | View / switch active model·retrieval·embedding           |
+| GET      | `/api/tree`, `/api/page/{n}`                        | Document tree / raw page                                 |
+| GET      | `/api/health`                                       | Health + counts                                          |
 
 ## CLI (offline indexing / admin)
 
@@ -91,6 +91,7 @@ python -m app.cli config         # show config
 ```
 
 ## What it does (capabilities)
+
 - **Multi-tenant**: each user's docs are isolated (`data/pdf/<tenant>/`, namespaced indexes + Qdrant collections).
 - **Query understanding**: classify → normalize → conservative rewrite before retrieval.
 - **Routing**: picks the right document; **fan-out + RRF** for cross-document `compare`.
@@ -102,9 +103,11 @@ python -m app.cli config         # show config
 - **Eval-gated**: golden set + DeepEval CI gate ([evals/](evals/)).
 
 ## Configuration
+
 Everything is env-toggleable — see [.env.example](.env.example) (providers, retrieval,
 guardrails, router, summarization, auth, storage, observability, checkpointer).
 
 ## Tech
+
 FastAPI · LangGraph · Qdrant · BM25 · sentence-transformers / OpenAI / Ollama + cross-encoder ·
 PyMuPDF + pdfplumber · tiktoken · OpenTelemetry · DeepEval/Ragas.
