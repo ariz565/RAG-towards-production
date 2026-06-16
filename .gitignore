@@ -1,0 +1,59 @@
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+data/
+
+# ── Virtual environments ───────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+.env
+
+# ── Caches ─────────────────────────────────────────────
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+*.log
+
+# ── Secrets / environment ──────────────────────────────
+.env
+.env.*
+!.env.example
+.dockerignore
+
+# ── Local model / HF caches (if pulled into the project) ─
+.huggingface/
+.sentence_transformers/
+
+# ── Runtime data artifacts (indexes, vectors, state, uploads) ─
+data/pdf/*
+data/chunks/*
+data/index/*
+data/bm25/*
+data/qdrant/
+data/checkpoints.sqlite
+data/users.json
+data/audit/
+data/index/*_lineage.json
+# keep the directories tracked
+!data/pdf/.gitkeep
+!data/chunks/.gitkeep
+!data/index/.gitkeep
+!data/bm25/.gitkeep
+
+# ── OS / editor ────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/

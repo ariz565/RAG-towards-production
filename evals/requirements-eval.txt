@@ -1,0 +1,10 @@
+# Evaluation-only dependencies (kept separate from runtime requirements.txt)
+# Install: pip install -r evals/requirements-eval.txt
+
+deepeval>=2.0.0          # LLM-judge metrics + pytest CI gate
+ragas>=0.2.0             # offline RAG metrics for tuning
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+
+# Ragas judge wrappers (only needed for ragas_offline.py)
+langchain-openai>=0.3.0

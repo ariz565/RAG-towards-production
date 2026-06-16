@@ -1,0 +1,97 @@
+[project]
+name = "vision"
+version = "2.0.0"
+description = "Vision — reasoning-grounded, multi-tenant agentic RAG platform for any document."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ExWhyZz" }]
+
+dependencies = [
+    # Core
+    "fastapi[standard]>=0.137.0",
+    "uvicorn>=0.34.0",
+    "pydantic>=2.13.0",
+    "pydantic-settings>=2.8.0",
+    "python-dotenv>=1.1.0",
+    "python-multipart>=0.0.18",
+    # LangGraph pipeline (1.x stable line; cap next major)
+    "langgraph>=1.0,<2.0",
+    "langchain-core>=1.0,<2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "aiosqlite>=0.20.0",
+    # PDF processing
+    "pymupdf>=1.27.0",
+    "pdfplumber>=0.11.0",
+    "tiktoken>=0.11.0",
+    # LLM providers
+    "openai>=1.101,<3.0",
+    "google-generativeai>=0.8.0",
+    "ollama>=0.4.0",
+    # Embeddings & vector search
+    "sentence-transformers>=3.0,<6.0",
+    "qdrant-client>=1.18.0",
+    "numpy>=1.26.0",
+    # BM25 sparse retrieval
+    "rank-bm25>=0.2.2",
+    # Frontend
+    "streamlit>=1.40.0",
+    # Observability (OpenTelemetry GenAI semconv)
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+]
+
+[dependency-groups]
+# Install with: uv sync --group dev
+dev = [
+    "ruff>=0.9.0",
+    "mypy>=1.13.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pre-commit>=4.0.0",
+]
+
+[tool.uv]
+# Application project (not a distributable library) — uv just manages the env.
+package = false
+
+# ── Ruff (lint + format) ──────────────────────────────────────────────
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["data", ".venv", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F",     # pyflakes / pycodestyle
+    "I",          # isort (import order)
+    "UP",         # pyupgrade
+    "B",          # flake8-bugbear
+    "SIM",        # flake8-simplify
+    "C4",         # comprehensions
+    "ASYNC",      # async pitfalls
+]
+ignore = [
+    "E501",       # line length handled by the formatter
+    "B008",       # FastAPI uses callables in arg defaults (Depends/File/Form)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+
+# ── mypy (type checking) ──────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true     # third-party stubs (pymupdf, qdrant, ollama, …) are incomplete
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+exclude = ["data/", "docs/", "\\.venv/"]
+
+# ── pytest ────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "evals"]
+python_files = ["test_*.py"]
+addopts = "-ra"
