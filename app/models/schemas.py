@@ -21,6 +21,10 @@ class AskRequest(BaseModel):
         description="The question to ask about the admission guide.",
         examples=["What is the GPA requirement for Computer Science?"],
     )
+    thread_id: str | None = Field(
+        default=None,
+        description="Optional thread ID to continue an existing conversation.",
+    )
     strategy: str | None = Field(
         default=None,
         description="Retrieval strategy override: pageindex | hybrid | bm25_only | vector_only. "
@@ -28,7 +32,7 @@ class AskRequest(BaseModel):
     )
     model_provider: str | None = Field(
         default=None,
-        description="Model provider override: openai | azure_openai | openrouter | groq | gemini | ollama. "
+        description="Model provider override: openai | azure_openai | openrouter | groq | nvidia | gemini | ollama. "
                     "If None, uses server default.",
     )
     tenant_id: str | None = Field(

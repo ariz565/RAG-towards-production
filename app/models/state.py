@@ -23,6 +23,7 @@ class PipelineState(TypedDict):
 
     # ── Conversation ────────────────────────────────────────
     messages: Annotated[list[AnyMessage], add_messages]
+    conversation_summary: str
 
     # ── Query Tracking ──────────────────────────────────────
     original_query: str

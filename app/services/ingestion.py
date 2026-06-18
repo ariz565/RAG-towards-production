@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Generator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -77,55 +78,301 @@ def extract_pages(pdf_path: str | Path) -> list[dict]:
     Returns:
         List of {page_number: int, text: str, tables: list[str]}
     """
+    return list(extract_pages_stream(pdf_path))
+
+
+def extract_pages_stream(pdf_path: str | Path) -> Generator[dict, None, None]:
+    """Stream page extraction from the PDF without buffering the full document."""
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    pages = []
     doc = pymupdf.open(str(pdf_path))
+    pdfplumber_context = None
+    pdfplumber_doc = None
 
-    for i in range(len(doc)):
-        page = doc[i]
-        text = page.get_text()
-        pages.append({
-            "page_number": i + 1,
-            "text": text.strip(),
-            "tables": [],
-        })
-
-    doc.close()
-    logger.info(f"Extracted {len(pages)} pages from {pdf_path.name}")
-
-    # Try pdfplumber for tables (optional dependency)
     try:
         import pdfplumber
-
-        with pdfplumber.open(str(pdf_path)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                tables = page.extract_tables()
-                if tables and i < len(pages):
-                    table_texts = []
-                    for table in tables:
-                        # Convert table to readable text
-                        rows = []
-                        for row in table:
-                            cleaned = [str(cell).strip() if cell else "" for cell in row]
-                            rows.append(" | ".join(cleaned))
-                        table_texts.append("\n".join(rows))
-                    pages[i]["tables"] = table_texts
-
-        logger.info("Table extraction complete (pdfplumber)")
+        pdfplumber_doc = pdfplumber.open(str(pdf_path))
     except ImportError:
         logger.info("pdfplumber not available — skipping table extraction")
     except Exception as e:
-        logger.warning(f"Table extraction failed: {e}")
+        logger.warning(f"Table extraction initialization failed: {e}")
+        pdfplumber_doc = None
 
-    return pages
+    try:
+        page_count = len(doc)
+        logger.info(f"Streaming extraction: {page_count} pages from {pdf_path.name}")
+
+        for i in range(page_count):
+            page = doc[i]
+            text = page.get_text().strip()
+            tables = []
+            if pdfplumber_doc and i < len(pdfplumber_doc.pages):
+                try:
+                    raw_tables = pdfplumber_doc.pages[i].extract_tables()
+                    if raw_tables:
+                        for table in raw_tables:
+                            rows = [" | ".join(str(cell).strip() if cell else "" for cell in row) for row in table]
+                            tables.append("\n".join(rows))
+                except Exception as e:
+                    logger.warning(f"Table extraction failed on page {i+1}: {e}")
+
+            yield {
+                "page_number": i + 1,
+                "text": text,
+                "tables": tables,
+            }
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+        if pdfplumber_doc:
+            try:
+                pdfplumber_doc.close()
+            except Exception:
+                pass
+
+
+def _page_blocks(pages: list[dict]) -> list[tuple[int, str]]:
+    """Flatten pages (with tables appended) into (page_number, paragraph) blocks."""
+    blocks: list[tuple[int, str]] = []
+    for page_data in pages:
+        page_num = page_data["page_number"]
+        text = page_data["text"]
+        if page_data.get("tables"):
+            text += "\n\n--- Tables ---\n" + "\n\n".join(page_data["tables"])
+        for para in re.split(r"\n\s*\n", text):
+            para = para.strip()
+            if para:
+                blocks.append((page_num, para))
+    return blocks
+
+
+def _page_blocks_stream(pages_iterable) -> Generator[tuple[int, str], None, None]:
+    """Flatten a page stream into paragraph blocks without buffering the full document."""
+    for page_data in pages_iterable:
+        page_num = page_data["page_number"]
+        text = page_data["text"]
+        if page_data.get("tables"):
+            text += "\n\n--- Tables ---\n" + "\n\n".join(page_data["tables"])
+        for para in re.split(r"\n\s*\n", text):
+            para = para.strip()
+            if para:
+                yield page_num, para
+
+
+def chunk_document_stream(
+    pages_iterable,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+):
+    """Yield chunks from a streaming page iterable without buffering the whole document."""
+    chunk_size = chunk_size or settings.chunk_size
+    chunk_overlap = chunk_overlap or settings.chunk_overlap
+
+    cur_text = ""
+    cur_pages: list[int] = []
+    cur_tokens = 0
+
+    def flush(next_page: int | None):
+        nonlocal cur_text, cur_pages, cur_tokens
+        if not cur_text.strip():
+            return None
+        chunk = {
+            "text": cur_text.strip(),
+            "page_numbers": sorted(set(cur_pages)),
+            "token_count": cur_tokens,
+        }
+        overlap = _overlap_tail(cur_text, chunk_overlap)
+        carry = cur_pages[-1] if cur_pages else next_page
+        cur_text = overlap
+        cur_pages = [p for p in (carry,) if p is not None]
+        cur_tokens = _count_tokens(overlap)
+        return chunk
+
+    def add(piece: str, page_num: int, sep: str) -> None:
+        nonlocal cur_text, cur_pages, cur_tokens
+        cur_text += (sep + piece) if cur_text else piece
+        cur_pages.append(page_num)
+        cur_tokens += _count_tokens(piece)
+
+    for page_num, para in _page_blocks_stream(pages_iterable):
+        para_tokens = _count_tokens(para)
+        if para_tokens > chunk_size:
+            for sent in re.split(r"(?<=[.!?])\s+", para):
+                sent = sent.strip()
+                if not sent:
+                    continue
+                if cur_tokens + _count_tokens(sent) > chunk_size and cur_text:
+                    chunk = flush(page_num)
+                    if chunk:
+                        yield chunk
+                add(sent, page_num, " ")
+        elif cur_tokens + para_tokens > chunk_size and cur_text:
+            chunk = flush(page_num)
+            if chunk:
+                yield chunk
+            add(para, page_num, "\n\n")
+        else:
+            add(para, page_num, "\n\n")
+
+    final = flush(None)
+    if final:
+        yield final
+
+
+def _document_sample(pdf_path: str | Path, char_limit: int) -> str:
+    """Return the first `char_limit` chars from the document text in streaming fashion."""
+    result = []
+    total = 0
+    for page_data in extract_pages_stream(pdf_path):
+        text = page_data["text"].strip()
+        if text:
+            remaining = char_limit - total
+            snippet = text[:remaining]
+            result.append(snippet)
+            total += len(snippet)
+            if total >= char_limit:
+                break
+    return "\n\n".join(result)
+
+
+def _jsonl_writer(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    f = open(path, "w", encoding="utf-8")
+    f.write("[")
+    first = True
+    try:
+        while True:
+            obj = yield
+            if obj is None:
+                break
+            if not first:
+                f.write(",\n")
+            else:
+                first = False
+            json.dump(obj, f, indent=2, ensure_ascii=False)
+    finally:
+        f.write("\n]")
+        f.close()
+
+
+async def ingest_pdf_streaming(
+    pdf_path: str | Path,
+    *,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    save_chunks: bool = False,
+):
+    """Stream PDF ingestion as chunks without buffering the full document."""
+    from app.services.llm import chat
+
+    pdf_path = Path(pdf_path)
+    logger.info(f"Starting streaming ingestion: {pdf_path.name}")
+
+    if save_chunks:
+        chunks_file = settings.chunks_path / f"{pdf_path.stem}_chunks.json"
+        writer = _jsonl_writer(chunks_file)
+        next(writer)
+    else:
+        writer = None
+
+    doc_sample = None
+    if settings.contextual_retrieval_enabled:
+        doc_sample = _document_sample(pdf_path, settings.contextual_doc_sample_chars)
+
+    chunk_index = 0
+    for raw in _stream_raw_chunks(pdf_path, chunk_size, chunk_overlap):
+        section_title = detect_section_title(raw["text"])
+        pages_span = raw["page_numbers"]
+        chunk = Chunk(
+            id=f"{pdf_path.stem}_c{chunk_index}",
+            text=raw["text"],
+            page_numbers=pages_span,
+            section_title=section_title,
+            chunk_index=chunk_index,
+            token_count=raw["token_count"],
+            metadata={
+                "source": pdf_path.name,
+                "pages": pages_span,
+            },
+        )
+
+        if doc_sample and settings.contextual_retrieval_enabled:
+            try:
+                prompt = prompts.contextualize_chunk(doc_sample, chunk.text)
+                resp = await chat(prompt, temperature=0)
+                chunk.context = (resp.content or "").strip()
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(f"Contextualization failed for {chunk.id}: {e}")
+
+        if writer is not None:
+            writer.send(chunk.to_dict())
+
+        yield chunk
+        chunk_index += 1
+
+    if writer is not None:
+        writer.send(None)
+
+
+def _stream_raw_chunks(
+    pdf_path: str | Path,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+):
+    return chunk_document_stream(
+        extract_pages_stream(pdf_path),
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+
+
+async def ingest_pdf(
+    pdf_path: str | Path,
+    *,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    save_chunks: bool = True,
+) -> list[Chunk]:
+    """Full ingestion pipeline: PDF → extracted pages → chunks.
+
+    Steps:
+    1. Extract all pages (text + tables)
+    2. Chunk each page with overlap
+    3. Assign IDs and detect section titles
+    4. Optionally save chunks to disk
+
+    Args:
+        pdf_path: Path to the PDF file.
+        chunk_size: Override chunk size from settings.
+        chunk_overlap: Override chunk overlap from settings.
+        save_chunks: Whether to save chunks to data/chunks/.
+
+    Returns:
+        List of Chunk objects ready for embedding and indexing.
+    """
+    pdf_path = Path(pdf_path)
+    logger.info(f"Starting ingestion: {pdf_path.name}")
+
+    all_chunks: list[Chunk] = []
+    async for chunk in ingest_pdf_streaming(
+        pdf_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap, save_chunks=save_chunks
+    ):
+        all_chunks.append(chunk)
+
+    logger.info(
+        f"Ingestion complete: {pdf_path.name} → {len(all_chunks)} chunks "
+        f"(avg {sum(c.token_count for c in all_chunks) // max(len(all_chunks), 1)} tokens/chunk)"
+    )
+    return all_chunks
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SECTION HEADING DETECTION
-# ═══════════════════════════════════════════════════════════════════════
+# CONTEXTUAL RETRIEVAL (Anthropic) — situate each chunk in the document
+# ═══════════════════════════════════════════════════════
 
 # Common patterns for section headings in university guides
 _HEADING_PATTERNS = [
@@ -178,21 +425,6 @@ def _overlap_tail(text: str, overlap_tokens: int) -> str:
     if overlap_words >= len(words):
         return text
     return " ".join(words[-overlap_words:])
-
-
-def _page_blocks(pages: list[dict]) -> list[tuple[int, str]]:
-    """Flatten pages (with tables appended) into (page_number, paragraph) blocks."""
-    blocks: list[tuple[int, str]] = []
-    for page_data in pages:
-        page_num = page_data["page_number"]
-        text = page_data["text"]
-        if page_data.get("tables"):
-            text += "\n\n--- Tables ---\n" + "\n\n".join(page_data["tables"])
-        for para in re.split(r"\n\s*\n", text):
-            para = para.strip()
-            if para:
-                blocks.append((page_num, para))
-    return blocks
 
 
 def chunk_document(

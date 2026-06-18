@@ -8,19 +8,36 @@ python-multipart>=0.0.18   # required for file uploads (UploadFile)
 
 # LangGraph Pipeline (1.x stable line; cap the next major to avoid surprise breaks)
 langgraph>=1.0,<2.0
-langchain-core>=1.0,<2.0
+langchain-core>=0.3,<2.0
 langgraph-checkpoint-sqlite>=2.0.0   # durable execution (resume-after-crash); falls back to memory if absent
 aiosqlite>=0.20.0                    # async sqlite driver for AsyncSqliteSaver
+
+# LangChain provider integrations  (2026 unified ChatModel interface)
+# These replace raw provider SDKs for LLM calls and automatically handle:
+#   • connection pool reuse        (no per-call client creation)
+#   • message format translation   (OpenAI-style dicts ↔ provider APIs)
+#   • .with_structured_output()    (Pydantic-validated JSON, no manual parsing)
+#   • native streaming             (.astream())
+langchain-openai>=0.3.0,<2.0        # OpenAI, Azure OpenAI, OpenRouter
+langchain-anthropic>=0.3.0,<2.0     # Anthropic Claude (extended thinking)
+langchain-google-genai>=2.0.0,<3.0  # Google Gemini (google-genai SDK)
+langchain-groq>=0.2.0,<2.0          # Groq fast inference
+langchain-nvidia-ai-endpoints>=0.3.0 # NVIDIA NIM (ChatNVIDIA + extra_body)
+langchain-aws>=0.2.0,<2.0           # AWS Bedrock (ChatBedrockConverse)
+langchain-ollama>=0.3.0,<2.0        # Ollama local models
 
 # PDF Processing
 pymupdf>=1.27.0
 pdfplumber>=0.11.0
 tiktoken>=0.11.0
 
-# LLM Providers
-openai>=1.101,<3.0          # SDK calls (chat.completions) are stable across 1.x–2.x
-google-generativeai>=0.8.0
+# Raw provider SDKs (kept for embeddings and as explicit transitive deps)
+# openai  — used by embeddings.py and evals/ragas_offline.py directly
+# ollama  — used by embeddings.py (_ollama_embed) directly
+openai>=1.101,<3.0
 ollama>=0.4.0
+# NOTE: google-generativeai has been removed — it is deprecated (Jan 2025).
+#       langchain-google-genai >=2.0 uses the new google-genai SDK internally.
 
 # Embeddings & Vector Search
 sentence-transformers>=3.0,<6.0   # CrossEncoder/SentenceTransformer API stable; cap next major
@@ -29,6 +46,9 @@ numpy>=1.26.0
 
 # BM25 Sparse Retrieval
 rank-bm25>=0.2.2
+
+# Postgres (for production; optional)
+asyncpg>=1.0.0
 
 # Frontend
 streamlit>=1.40.0

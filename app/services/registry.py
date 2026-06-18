@@ -130,6 +130,8 @@ class CorpusRegistry:
                 "doc_id": b.doc_id,
                 "doc_name": b.document_index.doc_name or b.doc_id,
                 "total_pages": b.document_index.total_pages,
+                "total_chunks": len(b.hybrid_index._chunks) if b.hybrid_index else 0,
+                "preview": (b.hybrid_index._chunks[0]["text"][:150] + "...") if b.hybrid_index and b.hybrid_index._chunks else "",
                 "pageindex": b.document_index.is_loaded,
                 "hybrid": b.hybrid_index.is_loaded,
                 "topics": b.profile.topics,

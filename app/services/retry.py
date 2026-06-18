@@ -56,6 +56,10 @@ def _status_code(exc: Exception) -> int | None:
         sc = getattr(resp, "status_code", None)
         if isinstance(sc, int):
             return sc
+    
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return _status_code(cause)
     return None
 
 
@@ -63,6 +67,10 @@ def _retry_after_seconds(exc: Exception) -> float | None:
     resp = getattr(exc, "response", None)
     headers = getattr(resp, "headers", None) if resp is not None else None
     if not headers:
+        # Walk the cause chain before giving up.
+        cause = getattr(exc, "__cause__", None)
+        if cause is not None and cause is not exc:
+            return _retry_after_seconds(cause)
         return None
     try:
         value = headers.get("retry-after") or headers.get("Retry-After")

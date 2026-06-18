@@ -142,6 +142,68 @@ async def safety_check_node(state: PipelineState) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# NODE 0.5: QUERY UNDERSTANDING
+# Rewrite query contextually based on conversation history and summarize memory
+# ═══════════════════════════════════════════════════════════════════════
+
+async def query_understanding_node(state: PipelineState) -> dict:
+    start = time.time()
+    query = state["original_query"]
+    messages = state.get("messages", [])
+    summary = state.get("conversation_summary", "")
+
+    # Exclude the very last message since it's the current query
+    history_msgs = messages[:-1] if len(messages) > 0 else []
+
+    if not history_msgs and not summary:
+        return {
+            "pipeline_steps": [{
+                "node_name": "query_understanding", "status": "completed",
+                "thinking": "No history to consider.", "result": "skipped",
+                "duration_ms": (time.time() - start) * 1000, "tokens_used": 0,
+            }]
+        }
+
+    total_tokens = 0
+    new_summary = summary
+    
+    # Context Summarization: if history gets long (e.g. > 4 messages = 2 turns)
+    if len(history_msgs) >= 4:
+        # Compact everything except the most recent 2 turns
+        msgs_to_summarize = history_msgs[:-4]
+        if msgs_to_summarize:
+            new_text = "\n".join([f"{m.type}: {m.content}" for m in msgs_to_summarize])
+            prompt = prompts.summarize_conversation(summary, new_text)
+            resp = await chat(prompt, temperature=0)
+            new_summary = resp.content.strip()
+            total_tokens += resp.tokens_used
+            # Note: We keep `messages` full in the state for auditing, 
+            # but only pass summary + latest to the rewrite LLM to save tokens.
+            
+    # Prepare context for rewrite
+    recent_msgs = history_msgs[-4:]
+    history_text = new_summary + "\n" if new_summary else ""
+    history_text += "\n".join([f"{m.type}: {m.content}" for m in recent_msgs])
+
+    prompt = prompts.query_understanding(history_text, query)
+    result, tokens = await chat_json(prompt, temperature=0)
+    total_tokens += tokens
+    
+    rewritten = result.get("rewritten", query)
+    reasoning = result.get("reasoning", "")
+
+    return {
+        "conversation_summary": new_summary,
+        "rewritten_query": rewritten if rewritten != query else None,
+        "pipeline_steps": [{
+            "node_name": "query_understanding", "status": "completed",
+            "thinking": reasoning or "Rewrote based on history.", 
+            "result": f"Rewritten: {rewritten}",
+            "duration_ms": (time.time() - start) * 1000, "tokens_used": total_tokens,
+        }]
+    }
+
+# ═══════════════════════════════════════════════════════════════════════
 # NODE 1: GUARDRAIL
 # Is this question about admissions / the university guide?
 # ═══════════════════════════════════════════════════════════════════════
@@ -925,6 +987,7 @@ def build_pipeline(checkpointer) -> StateGraph:
     workflow = StateGraph(PipelineState)
 
     # Add all nodes
+    workflow.add_node("query_understanding", _traced("query_understanding", query_understanding_node))
     workflow.add_node("safety_check", _traced("safety_check", safety_check_node))
     workflow.add_node("blocked", _traced("blocked", blocked_node))
     workflow.add_node("guardrail", _traced("guardrail", guardrail_node))
@@ -940,8 +1003,9 @@ def build_pipeline(checkpointer) -> StateGraph:
     workflow.add_node("out_of_scope", _traced("out_of_scope", out_of_scope_node))
     workflow.add_node("insufficient_grounding", _traced("insufficient_grounding", insufficient_grounding_node))
 
-    # Entry: input safety guardrail first
-    workflow.add_edge(START, "safety_check")
+    # Entry: query understanding first, then safety check
+    workflow.add_edge(START, "query_understanding")
+    workflow.add_edge("query_understanding", "safety_check")
     workflow.add_conditional_edges(
         "safety_check",
         route_after_safety,
@@ -1083,6 +1147,7 @@ def _format_result(result, *, query, active_strategy, model_used, bundle, thread
         "pipeline_steps": result.get("pipeline_steps", []),
         "retrieval_attempts": result.get("retrieval_attempts", 0),
         "rewritten_query": result.get("rewritten_query"),
+        "conversation_summary": result.get("conversation_summary"),
         "strategy_used": active_strategy,
         "model_used": model_used,
         "total_tokens": total_tokens,

@@ -27,6 +27,7 @@ from app.models.schemas import (
 )
 from app.services.audit import record_ask
 from app.services.doc_router import doc_router
+from app.services.governance import active_policy
 from app.services.jobs import job_store
 from app.services.lineage import record_upload
 from app.services.multi_doc import multi_doc_ask
@@ -149,7 +150,7 @@ async def upload(
             chunk_count=stats.get("total_chunks", 0), has_hybrid=True,
         )
         if family and version:
-            version_store.register(principal.tenant_id, family, version, doc_id, effective_date or "")
+            await version_store.register(principal.tenant_id, family, version, doc_id, effective_date or "")
         msg = f"Uploaded + indexed ({stats.get('total_chunks', 0)} chunks)."
         if family and version:
             msg += f" Registered as {family} v{version}."
@@ -168,7 +169,7 @@ async def list_versions(
     family: str | None = None, principal: Principal = Depends(get_principal_optional)
 ):
     tenant = _tenant_for(principal, None)
-    return {"tenant_id": tenant, "versions": version_store.list(tenant, family)}
+    return {"tenant_id": tenant, "versions": await version_store.list(tenant, family)}
 
 
 # ── Async summarize (job → poll) ─────────────────────────────────────
@@ -186,7 +187,7 @@ async def summarize_async(
         raise HTTPException(503, "No document to summarize for this tenant.")
     _resolve_or_404(tenant, doc_id)
     style = request.style or "concise"
-    job = job_store.submit(
+    job = await job_store.submit(
         "summarize", lambda: summarize_document(tenant, doc_id, style=style)
     )
     return JobResponse(job_id=job.job_id, kind=job.kind, status=job.status)
@@ -194,7 +195,7 @@ async def summarize_async(
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: str) -> JobResponse:
-    job = job_store.get(job_id)
+    job = await job_store.get(job_id)
     if not job:
         raise HTTPException(404, f"job '{job_id}' not found")
     return JobResponse(**job.to_dict())
@@ -250,7 +251,7 @@ async def ask_question(
     # Versioned family → resolve to the latest (or as-of) version's doc_id.
     requested_doc = request.doc_id
     if request.family:
-        resolved = version_store.resolve(tenant, request.family, request.as_of)
+        resolved = await version_store.resolve(tenant, request.family, request.as_of)
         if not resolved:
             raise HTTPException(404, f"No version found for family '{request.family}'.")
         requested_doc = resolved
@@ -281,7 +282,7 @@ async def ask_question(
     _check_strategy_ready(bundle, request.strategy or settings.active_retrieval.value)
     result = await ask(
         search_query, strategy=request.strategy, model_provider=request.model_provider,
-        tenant_id=tenant, doc_id=doc_id,
+        tenant_id=tenant, doc_id=doc_id, thread_id=request.thread_id
     )
     result["query"] = request.query                 # echo the user's original
     result["query_intent"] = analysis.intent
@@ -298,14 +299,22 @@ async def ask_question_stream(
     tenant = _tenant_for(principal, request.tenant_id)
     analysis = await analyze(request.query)
     search_query = analysis.rewritten or request.query
-    doc_id = await _route_doc(tenant, search_query, request.doc_id)
+    requested_doc = request.doc_id
+
+    if request.family:
+        resolved = await version_store.resolve(tenant, request.family, request.as_of)
+        if not resolved:
+            raise HTTPException(404, f"No version found for family '{request.family}'.")
+        requested_doc = resolved
+
+    doc_id = await _route_doc(tenant, search_query, requested_doc)
     bundle = _resolve_or_404(tenant, doc_id)
     _check_strategy_ready(bundle, request.strategy or settings.active_retrieval.value)
 
     async def event_generator():
         async for event in ask_streaming(
             search_query, strategy=request.strategy, model_provider=request.model_provider,
-            tenant_id=tenant, doc_id=doc_id,
+            tenant_id=tenant, doc_id=doc_id, thread_id=request.thread_id
         ):
             yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
 
@@ -402,21 +411,38 @@ async def list_documents(principal: Principal = Depends(get_principal_optional))
 
 # ── Config ───────────────────────────────────────────────────────────
 
+def _is_admin(principal: Principal) -> bool:
+    return principal.tenant_id == settings.default_tenant
+
+
 @router.get("/config")
-async def get_config():
+async def get_config(principal: Principal = Depends(get_principal_optional)):
     from app.services.llm import get_available_providers
+
+    policy = active_policy()
+    providers = [p for p in get_available_providers() if p["configured"] or p.get("local")]
+
     return {
         "active_model": settings.active_model.value,
         "active_retrieval": settings.active_retrieval.value,
         "active_embedding": settings.active_embedding.value,
-        "providers": get_available_providers(),
+        "providers": providers,
         "strategies": [s.value for s in RetrievalStrategy],
+        "governance_tier": policy.risk_tier,
+        "tenant_id": None if principal.anonymous else principal.tenant_id,
     }
 
 
 @router.post("/config")
-async def update_config(updates: dict):
+async def update_config(updates: dict, principal: Principal = Depends(get_principal)):
     from app.config import EmbeddingProvider, ModelProvider
+
+    policy = active_policy()
+    if policy.risk_tier != "high" and not _is_admin(principal):
+        raise HTTPException(
+            403,
+            "Config mutations require admin privileges or high governance tier.",
+        )
 
     with _config_lock:  # admin-only; lock-guarded global mutation
         if "active_model" in updates:

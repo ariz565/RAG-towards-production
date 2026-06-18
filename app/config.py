@@ -24,8 +24,11 @@ class ModelProvider(str, Enum):
     OPENAI = "openai"
     AZURE_OPENAI = "azure_openai"
     OPENROUTER = "openrouter"
+    ANTHROPIC = "anthropic"
     GROQ = "groq"
+    NVIDIA = "nvidia"
     GEMINI = "gemini"
+    BEDROCK = "bedrock"
     OLLAMA = "ollama"
 
 
@@ -67,36 +70,89 @@ class Settings(BaseSettings):
     # ═══════════════════════════════════════════════════════════════
     # MODEL REGISTRY — credentials + model names for each provider
     # ═══════════════════════════════════════════════════════════════
+    # Bring your keys → set the provider → everything just works.
+    # Each block: credentials + model + sampling overrides.
+    # Sampling falls back to Global Sampling Defaults unless overridden.
 
-    # ── OpenAI ──────────────────────────────────────────────
+    # ── OpenAI  (langchain-openai, openai SDK) ────────────────────
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
+    openai_organization: str = ""           # optional; enterprise accounts
+    openai_model: str = "gpt-4.1"
     openai_embedding_model: str = "text-embedding-3-small"
+    # Sampling overrides (None → falls back to global defaults)
+    openai_max_tokens: int | None = None
+    openai_top_p: float | None = None
+    openai_presence_penalty: float = 0.0   # -2.0..2.0; penalises repeated topics
+    openai_frequency_penalty: float = 0.0  # -2.0..2.0; penalises repeated tokens
+    openai_reasoning_effort: str = "medium"  # o-series | GPT-5 series: low | medium | high | xhigh
 
     # ── Azure OpenAI ────────────────────────────────────────
     azure_openai_api_key: str = ""
     azure_openai_endpoint: str = ""
     azure_openai_api_version: str = "2024-12-01-preview"
     azure_openai_deployment: str = "gpt-4o-mini"
+    # Sampling: Azure shares openai_* overrides above.
 
     # ── OpenRouter (OpenAI-compatible API) ─────────────────
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "openai/gpt-4o-mini"
+    # Sampling overrides (None → falls back to global defaults)
+    openrouter_max_tokens: int | None = None
+    openrouter_top_p: float | None = None
 
     # ── Groq (OpenAI-compatible API) ───────────────────────
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_model: str = "llama-3.3-70b-versatile"
+    # Sampling overrides (None → falls back to global defaults)
+    groq_max_tokens: int | None = None
+    groq_top_p: float | None = None
 
-    # ── Google Gemini ───────────────────────────────────────
+    # ── NVIDIA NIM (langchain-nvidia-ai-endpoints) ──────────────────
+    nvidia_api_key: str = ""
+    nvidia_model: str = "deepseek-ai/deepseek-v4-pro"
+    nvidia_max_tokens: int = 16384
+    nvidia_top_p: float = 0.95
+    nvidia_top_k: int | None = None
+    nvidia_thinking: bool = False           # thinking toggle (extra_body)
+
+    # ── Google Gemini ──────────────────────────────────────────────────
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
+    # Sampling overrides (None → falls back to global defaults)
+    gemini_max_tokens: int | None = None
+    gemini_top_p: float | None = None
+    gemini_top_k: int | None = None        # Gemini natively supports top_k
 
-    # ── Ollama (local / free) ───────────────────────────────
+    # ── Anthropic Claude ────────────────────────────────────────────
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-opus-4-8"
+    # Sampling overrides (None → falls back to global defaults)
+    anthropic_max_tokens: int | None = None
+    anthropic_top_p: float | None = None
+    anthropic_top_k: int | None = None     # Anthropic natively supports top_k
+    anthropic_thinking: bool = False       # forces temperature=1 when True
+    anthropic_thinking_budget: int = 8000  # budget_tokens; ignored when thinking=False
+
+    # ── AWS Bedrock (ChatBedrockConverse, IAM credentials via boto3) ──
+    bedrock_region: str = "us-east-1"
+    bedrock_model: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    # Sampling overrides (None → falls back to global defaults)
+    bedrock_max_tokens: int | None = None
+    bedrock_top_p: float | None = None
+    bedrock_top_k: int | None = None
+
+    # ── Ollama  (langchain-ollama, local server) ──────────────────
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
     ollama_embedding_model: str = "nomic-embed-text"
+    # Sampling overrides (None → falls back to global defaults)
+    ollama_max_tokens: int | None = None   # maps to num_predict
+    ollama_top_p: float | None = None
+    ollama_top_k: int | None = None
+    ollama_repeat_penalty: float | None = None  # default 1.1 in Ollama
+    ollama_num_ctx: int | None = None      # context window; None = model default
 
     # ── HuggingFace Embeddings (local / free) ──────────────
     hf_embedding_model: str = "all-MiniLM-L6-v2"
@@ -105,8 +161,14 @@ class Settings(BaseSettings):
     # ── Ollama Embeddings (local / free) ───────────────────
     ollama_embedding_dim: int = 768   # nomic-embed-text
 
-    # ── Temperature ─────────────────────────────────────────
-    temperature: float = 0.0
+    # ── Global Sampling Defaults ──────────────────────────────────
+    # Applied to all providers unless a provider-specific override is set.
+    temperature: float = 0.0                 # generation randomness
+    llm_max_tokens: int = 4096               # output token budget
+    llm_top_p: float = 1.0                   # nucleus sampling threshold
+    llm_top_k: int | None = None             # top-k; None = provider default
+    llm_seed: int | None = None              # None = non-deterministic
+    llm_stop_sequences: str = ""             # comma-separated stop strings
 
     # ── LLM resilience (timeouts + retry policy) ────────────
     # Retries only transient errors (429/5xx/timeouts) with exponential backoff
@@ -162,6 +224,19 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
 
     # ═══════════════════════════════════════════════════════════════
+    # DATABASE (Postgres for production) — optional migration path
+    # If set, enables dual-mode storage (JSON fallback if DB unavailable).
+    # ═══════════════════════════════════════════════════════════════
+    database_url: str = ""  # e.g. postgresql://user:pass@localhost/dbname
+    pg_pool_min_size: int = 1
+    pg_pool_max_size: int = 5
+    pg_pool_max_inactive_connection_lifetime_seconds: float = 300.0
+    pg_command_timeout_seconds: int = 10
+    users_backend: str = "json"  # "json" | "postgres"
+    versions_backend: str = "json"  # "json" | "postgres"
+    audit_backend: str = "jsonl"  # "jsonl" | "postgres"
+
+    # ═══════════════════════════════════════════════════════════════
     # AUTH — signup/login + signed bearer tokens
     # Stdlib only (no JWT/bcrypt dep). SET auth_secret VIA ENV IN PROD.
     # ═══════════════════════════════════════════════════════════════
@@ -176,6 +251,12 @@ class Settings(BaseSettings):
     # ═══════════════════════════════════════════════════════════════
     checkpointer: str = "sqlite"
     checkpoint_db_path: str = "data/checkpoints.sqlite"
+
+    # ═══════════════════════════════════════════════════════════════
+    # JOB STORE (persistence for async jobs like summarization)
+    # SQLite-backed for durability across restarts.
+    # ═══════════════════════════════════════════════════════════════
+    jobs_db_path: str = "data/jobs.db"
 
     # ═══════════════════════════════════════════════════════════════
     # OBSERVABILITY (Phase D) — OpenTelemetry GenAI semantic conventions
@@ -379,8 +460,11 @@ class Settings(BaseSettings):
             ModelProvider.OPENAI: self.openai_model,
             ModelProvider.AZURE_OPENAI: self.azure_openai_deployment,
             ModelProvider.OPENROUTER: self.openrouter_model,
+            ModelProvider.ANTHROPIC: self.anthropic_model,
             ModelProvider.GROQ: self.groq_model,
+            ModelProvider.NVIDIA: self.nvidia_model,
             ModelProvider.GEMINI: self.gemini_model,
+            ModelProvider.BEDROCK: self.bedrock_model,
             ModelProvider.OLLAMA: self.ollama_model,
         }.get(provider, self.ollama_model)
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import Header, HTTPException
+from dataclasses import dataclass
+
+from fastapi import Header, HTTPException, Cookie
 
 from app.config import settings
 from app.services.auth import verify_token
@@ -23,23 +25,37 @@ class Principal:
     anonymous: bool = False
 
 
-def _from_header(authorization: str | None) -> Principal | None:
-    if not authorization or not authorization.lower().startswith("bearer "):
+def _extract_token(authorization: str | None, cookie_token: str | None) -> str | None:
+    if cookie_token:
+        return cookie_token
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return None
+
+
+def _from_token(token: str | None) -> Principal | None:
+    if not token:
         return None
-    payload = verify_token(authorization.split(" ", 1)[1].strip())
+    payload = verify_token(token)
     if not payload:
         return None
     return Principal(payload["sub"], payload["tenant"], payload.get("email", ""))
 
 
-def get_principal(authorization: str | None = Header(default=None)) -> Principal:
-    principal = _from_header(authorization)
+def get_principal(
+    authorization: str | None = Header(default=None),
+    vision_access_token: str | None = Cookie(default=None)
+) -> Principal:
+    principal = _from_token(_extract_token(authorization, vision_access_token))
     if principal is None:
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return principal
 
 
-def get_principal_optional(authorization: str | None = Header(default=None)) -> Principal:
-    return _from_header(authorization) or Principal(
+def get_principal_optional(
+    authorization: str | None = Header(default=None),
+    vision_access_token: str | None = Cookie(default=None)
+) -> Principal:
+    return _from_token(_extract_token(authorization, vision_access_token)) or Principal(
         settings.default_tenant, settings.default_tenant, anonymous=True
     )

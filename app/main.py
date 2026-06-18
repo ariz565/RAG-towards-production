@@ -25,6 +25,9 @@ from app.config import settings
 from app.routers.ask import router
 from app.routers.auth import router as auth_router
 from app.routers.governance import router as governance_router
+from app.services.audit import audit_store
+from app.services.auth import user_store
+from app.services.versions import version_store
 
 # ── Branding banner (pure ASCII — safe on every console) ────────────
 
@@ -91,8 +94,26 @@ async def lifespan(app: FastAPI):
     logger.info(f"Server ready at http://{settings.host}:{settings.port}")
     logger.info(f"Docs at http://{settings.host}:{settings.port}/docs")
 
+    if await user_store.connect():
+        logger.info("User backend initialized")
+    else:
+        logger.warning("User backend failed to initialize; falling back if available")
+
+    if await version_store.connect():
+        logger.info("Version store initialized")
+    else:
+        logger.warning("Version store backend failed to initialize; falling back if available")
+
+    if await audit_store.connect():
+        logger.info("Audit store initialized")
+    else:
+        logger.warning("Audit store backend failed to initialize; falling back if available")
+
     yield  # Application runs
 
+    await audit_store.close()
+    await version_store.close()
+    await user_store.close()
     logger.info("Shutting down Vision")
 
 

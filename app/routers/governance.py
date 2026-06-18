@@ -56,4 +56,5 @@ async def get_audit(
 ) -> dict:
     """Most-recent audit records for the caller's tenant (newest first)."""
     limit = max(1, min(limit, 500))
-    return {"tenant_id": principal.tenant_id, "records": audit.read_recent(principal.tenant_id, limit)}
+    records = await audit.audit_store.read_recent_async(principal.tenant_id, limit)
+    return {"tenant_id": principal.tenant_id, "records": records}
