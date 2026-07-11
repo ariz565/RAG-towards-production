@@ -34,7 +34,7 @@ export default function SummarizePage() {
         try {
           const res = await getJob(jobId);
           setJobStatus(res.status);
-          if (res.status === "completed") {
+          if (res.status === "done") {
             setSummary(res.result?.summary || "");
           } else if (res.status === "failed") {
             setError(res.error || "Job failed");
@@ -122,7 +122,7 @@ export default function SummarizePage() {
             </div>
           )}
 
-          {jobStatus === "completed" && summary && (
+          {jobStatus === "done" && summary && (
             <div className="paper-card rounded-lg p-10 animate-fade-in">
                <div className="flex items-center gap-2 mb-6">
                  <CheckCircle2 className="h-4 w-4 text-emerald-700" />

@@ -229,6 +229,9 @@ class AskResponse(BaseModel):
     understood_query: str | None = Field(
         default=None, description="Normalized/rewritten query actually used for retrieval.",
     )
+    conversation_summary: str | None = Field(
+        default=None, description="Rolling summary of the conversation so far (multi-turn compaction).",
+    )
     interrupted: bool = Field(
         default=False,
         description="True if the run paused for human clarification (resume via /api/ask/resume).",

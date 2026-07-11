@@ -25,6 +25,7 @@ from app.config import settings
 from app.routers.ask import router
 from app.routers.auth import router as auth_router
 from app.routers.governance import router as governance_router
+from app.routers.second_brain import router as second_brain_router
 from app.services.audit import audit_store
 from app.services.auth import user_store
 from app.services.versions import version_store
@@ -139,6 +140,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(router)
 app.include_router(governance_router)
+app.include_router(second_brain_router)
 
 
 # ── Entry Point ─────────────────────────────────────────────────────

@@ -65,9 +65,14 @@ export default function InspectorPage() {
     if (!node) return null;
     return (
       <div className="pl-4 mt-2 border-l border-rule/50">
-        <div className="font-display text-lg mb-1">{node.title || "Section"}</div>
-        <div className="text-xs font-mono text-ink-soft mb-3">
-          Pages {node.start_page} - {node.end_page}
+        <div 
+          className="group cursor-pointer hover:bg-paper-tint/50 p-2 -ml-2 rounded transition-colors"
+          onClick={() => setSelectedPage(node.page_start)}
+        >
+          <div className="font-display text-lg mb-1 text-ink group-hover:text-cobalt-600 transition-colors">{node.title || "Section"}</div>
+          <div className="text-xs font-mono text-ink-soft mb-1">
+            Pages {node.page_start} - {node.page_end}
+          </div>
         </div>
         {node.children && node.children.length > 0 && (
           <div className="space-y-1">
@@ -92,7 +97,7 @@ export default function InspectorPage() {
           </div>
           <div className="bg-card p-4">
              <div className="eyebrow">Total Docs</div>
-             <div className="font-display text-2xl text-ink italic mt-1">{health.total_documents}</div>
+             <div className="font-display text-2xl text-ink italic mt-1">{health.documents}</div>
           </div>
           <div className="bg-card p-4">
              <div className="eyebrow">Vector Space</div>

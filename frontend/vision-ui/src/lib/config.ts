@@ -19,6 +19,7 @@ export const ROUTES = {
   inspector: "/inspector",
   config: "/config",
   account: "/account",
+  graph: "/graph",
 };
 
 export const THEME = {

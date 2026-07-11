@@ -113,15 +113,20 @@ class CorpusRegistry:
         return [b for b in self._bundles.values() if b.tenant_id == tenant_id]
 
     def resolve(self, tenant_id: str | None, doc_id: str | None) -> DocumentBundle | None:
-        """Resolve a bundle, falling back to the single/first loaded document."""
+        """Resolve a bundle scoped strictly to the requesting tenant.
+
+        Never falls back to another tenant's bundle — doing so previously let a
+        caller with no document of their own be served an arbitrary other
+        tenant's private document.
+        """
         tenant_id = tenant_id or settings.default_tenant
         if doc_id:
             return self.get(tenant_id, doc_id)
-        # No doc specified — prefer a doc in this tenant, else any loaded doc.
+        # No doc specified — use the (first) doc registered for this tenant, if any.
         for bundle in self._bundles.values():
             if bundle.tenant_id == tenant_id:
                 return bundle
-        return next(iter(self._bundles.values()), None)
+        return None
 
     def list(self) -> list[dict]:
         return [
@@ -225,6 +230,51 @@ class CorpusRegistry:
                 logger.warning(f"Failed to load bundle '{stem}': {e}")
         logger.info(f"Registry: {loaded} document(s) loaded across tenants.")
         return loaded
+
+    async def delete_tenant(self, tenant_id: str) -> int:
+        """Delete all bundles and associated data for a tenant."""
+        bundles_to_delete = [b for b in self._bundles.values() if b.tenant_id == tenant_id]
+        deleted_count = 0
+
+        for bundle in bundles_to_delete:
+            stem = namespace(bundle.tenant_id, bundle.doc_id)
+            
+            # 1. Delete Qdrant collection
+            if bundle.hybrid_index and bundle.hybrid_index._qdrant_client:
+                try:
+                    if bundle.hybrid_index._qdrant_client.collection_exists(bundle.hybrid_index._collection):
+                        bundle.hybrid_index._qdrant_client.delete_collection(bundle.hybrid_index._collection)
+                except Exception as e:
+                    logger.warning(f"Failed to delete Qdrant collection for {stem}: {e}")
+
+            # 2. Delete local files (PageIndex, BM25)
+            index_file = settings.index_path / f"{stem}_index.json"
+            if index_file.exists():
+                try:
+                    index_file.unlink()
+                except Exception:
+                    pass
+                
+            bm25_file = settings.bm25_path / f"{stem}_bm25.pkl"
+            if bm25_file.exists():
+                try:
+                    bm25_file.unlink()
+                except Exception:
+                    pass
+                
+            chunks_file = settings.bm25_path / f"{stem}_hybrid_chunks.json"
+            if chunks_file.exists():
+                try:
+                    chunks_file.unlink()
+                except Exception:
+                    pass
+
+            # 3. Remove from registry memory
+            self._bundles.pop(bundle.key, None)
+            deleted_count += 1
+            
+        logger.info(f"Registry: Deleted {deleted_count} bundles for tenant '{tenant_id}'.")
+        return deleted_count
 
 
 # Singleton registry

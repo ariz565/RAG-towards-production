@@ -14,6 +14,7 @@ const navItems = [
   { to: "/inspector", num: "05", label: "Inspector" },
   { to: "/config", num: "06", label: "Configuration" },
   { to: "/account", num: "07", label: "Account" },
+  { to: "/graph", num: "08", label: "Graph" },
 ] as const;
 
 function VisionMark() {

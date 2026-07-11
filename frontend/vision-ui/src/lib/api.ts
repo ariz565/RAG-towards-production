@@ -63,6 +63,12 @@ export async function getDocuments() {
   return fetchApi<any>("/api/documents");
 }
 
+export async function deleteAllData() {
+  return fetchApi<any>("/api/documents", {
+    method: "DELETE",
+  });
+}
+
 export async function uploadDocument(formData: FormData) {
   return fetchApi<any>("/api/upload", {
     method: "POST",
@@ -135,6 +141,11 @@ export async function updateConfig(data: any) {
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+// -- 7. Second Brain (standalone module's graph, read-only) --
+export async function getSecondBrainGraph() {
+  return fetchApi<any>("/api/second-brain/graph");
 }
 
 // -- Stream helper --

@@ -1385,6 +1385,7 @@ async def ask_streaming(
         "rag.stream": True,
     })
     request_span.__enter__()
+    interrupted = False
     try:
         async for event in pipeline.astream(
             initial_state,
@@ -1393,6 +1394,23 @@ async def ask_streaming(
         ):
             # Each event is {node_name: state_update}
             for node_name, update in event.items():
+                # LangGraph represents a HITL pause as {"__interrupt__": (Interrupt,...)},
+                # not {node_name: state_dict} — handle it before treating `update` as a dict.
+                if node_name == "__interrupt__":
+                    interrupted = True
+                    intr = update[0] if isinstance(update, (list, tuple)) and update else update
+                    value = getattr(intr, "value", intr)
+                    clarification = value if isinstance(value, dict) else {"question": str(value)}
+                    yield {
+                        "event": "interrupted",
+                        "data": {
+                            "interrupted": True,
+                            "clarification": clarification,
+                            "thread_id": thread_id,
+                        },
+                    }
+                    continue
+
                 # Emit node completion event with the new step data
                 # With the operator.add reducer, each update carries only this
                 # node's newly-appended step(s).
@@ -1419,18 +1437,18 @@ async def ask_streaming(
                         },
                     }
 
-        total_duration = (time.time() - start) * 1000
-
-        yield {
-            "event": "pipeline_complete",
-            "data": {
-                "total_duration_ms": total_duration,
-                "query": query,
-                "strategy_used": active_strategy,
-                "model_used": model_used,
-                "thread_id": thread_id,
-            },
-        }
+        if not interrupted:
+            total_duration = (time.time() - start) * 1000
+            yield {
+                "event": "pipeline_complete",
+                "data": {
+                    "total_duration_ms": total_duration,
+                    "query": query,
+                    "strategy_used": active_strategy,
+                    "model_used": model_used,
+                    "thread_id": thread_id,
+                },
+            }
     finally:
         clear_request_model(provider_token)
         clear_document(doc_token)

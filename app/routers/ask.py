@@ -188,15 +188,19 @@ async def summarize_async(
     _resolve_or_404(tenant, doc_id)
     style = request.style or "concise"
     job = await job_store.submit(
-        "summarize", lambda: summarize_document(tenant, doc_id, style=style)
+        "summarize", lambda: summarize_document(tenant, doc_id, style=style), tenant_id=tenant
     )
     return JobResponse(job_id=job.job_id, kind=job.kind, status=job.status)
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str) -> JobResponse:
+async def get_job(
+    job_id: str, principal: Principal = Depends(get_principal_optional)
+) -> JobResponse:
+    tenant = _tenant_for(principal, None)
     job = await job_store.get(job_id)
-    if not job:
+    # 404 (not 403) for a mismatched tenant too, so job existence isn't leaked.
+    if not job or job.tenant_id != tenant:
         raise HTTPException(404, f"job '{job_id}' not found")
     return JobResponse(**job.to_dict())
 
@@ -407,6 +411,18 @@ async def list_documents(principal: Principal = Depends(get_principal_optional))
     tenant = _tenant_for(principal, None)
     docs = [d for d in registry.list() if d["tenant_id"] == tenant]
     return {"tenant_id": tenant, "documents": docs}
+
+
+@router.delete("/documents")
+async def delete_documents(principal: Principal = Depends(get_principal)):
+    tenant = principal.tenant_id
+    try:
+        deleted = await registry.delete_tenant(tenant)
+        get_storage().delete_tenant_data(tenant)
+        return {"success": True, "message": f"Deleted {deleted} documents and associated data.", "deleted_count": deleted}
+    except Exception as e:
+        logger.exception("Deletion failed")
+        raise HTTPException(500, f"Deletion failed: {e}")
 
 
 # ── Config ───────────────────────────────────────────────────────────

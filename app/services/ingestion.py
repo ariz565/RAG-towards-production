@@ -330,46 +330,6 @@ def _stream_raw_chunks(
     )
 
 
-async def ingest_pdf(
-    pdf_path: str | Path,
-    *,
-    chunk_size: int | None = None,
-    chunk_overlap: int | None = None,
-    save_chunks: bool = True,
-) -> list[Chunk]:
-    """Full ingestion pipeline: PDF → extracted pages → chunks.
-
-    Steps:
-    1. Extract all pages (text + tables)
-    2. Chunk each page with overlap
-    3. Assign IDs and detect section titles
-    4. Optionally save chunks to disk
-
-    Args:
-        pdf_path: Path to the PDF file.
-        chunk_size: Override chunk size from settings.
-        chunk_overlap: Override chunk overlap from settings.
-        save_chunks: Whether to save chunks to data/chunks/.
-
-    Returns:
-        List of Chunk objects ready for embedding and indexing.
-    """
-    pdf_path = Path(pdf_path)
-    logger.info(f"Starting ingestion: {pdf_path.name}")
-
-    all_chunks: list[Chunk] = []
-    async for chunk in ingest_pdf_streaming(
-        pdf_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap, save_chunks=save_chunks
-    ):
-        all_chunks.append(chunk)
-
-    logger.info(
-        f"Ingestion complete: {pdf_path.name} → {len(all_chunks)} chunks "
-        f"(avg {sum(c.token_count for c in all_chunks) // max(len(all_chunks), 1)} tokens/chunk)"
-    )
-    return all_chunks
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # CONTEXTUAL RETRIEVAL (Anthropic) — situate each chunk in the document
 # ═══════════════════════════════════════════════════════

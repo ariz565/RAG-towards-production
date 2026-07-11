@@ -151,7 +151,7 @@ export default function ChatPage() {
               currentPipeline.push(data);
             }
             setSessionHistory(prev => prev.map(s => s.id === newItemId ? { ...s, pipeline_steps: [...currentPipeline] } : s));
-          } else if (type === "pipeline_complete") {
+          } else if (type === "pipeline_complete" || type === "interrupted") {
             processResponse(newItemId, data);
           } else if (type === "error") {
             setSessionHistory(prev => prev.map(s => s.id === newItemId ? { ...s, answerText: "[Error]: Stream failed.", loading: false } : s));

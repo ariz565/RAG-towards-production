@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 class Job:
     job_id: str
     kind: str
+    tenant_id: str = ""
     status: str = "pending"          # pending | running | done | failed
     result: dict | None = None
     error: str = ""
@@ -35,6 +37,7 @@ class Job:
         return {
             "job_id": self.job_id,
             "kind": self.kind,
+            "tenant_id": self.tenant_id,
             "status": self.status,
             "result": self.result,
             "error": self.error,
@@ -65,6 +68,7 @@ class JobStore:
                         CREATE TABLE IF NOT EXISTS jobs (
                             job_id TEXT PRIMARY KEY,
                             kind TEXT NOT NULL,
+                            tenant_id TEXT NOT NULL DEFAULT '',
                             status TEXT NOT NULL,
                             result TEXT,
                             error TEXT,
@@ -73,6 +77,12 @@ class JobStore:
                         )
                         """
                     )
+                    # Backfill for DBs created before tenant scoping existed.
+                    try:
+                        await db.execute("ALTER TABLE jobs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''")
+                        await db.commit()
+                    except aiosqlite.OperationalError:
+                        pass  # column already exists
                     await db.commit()
                 self._initialized = True
                 logger.info("Job store initialized at %s", self.db_path)
@@ -81,20 +91,21 @@ class JobStore:
                 self._initialized = True
                 logger.warning("Job store unavailable, falling back to memory: %s", exc)
 
-    async def create(self, kind: str) -> Job:
+    async def create(self, kind: str, tenant_id: str = "") -> Job:
         await self._init_db()
-        job = Job(job_id=uuid.uuid4().hex[:16], kind=kind)
+        job = Job(job_id=uuid.uuid4().hex[:16], kind=kind, tenant_id=tenant_id)
         if self._use_db:
             try:
                 async with aiosqlite.connect(str(self.db_path)) as db:
                     await db.execute(
                         """
-                        INSERT INTO jobs (job_id, kind, status, result, error, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO jobs (job_id, kind, tenant_id, status, result, error, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             job.job_id,
                             job.kind,
+                            job.tenant_id,
                             job.status,
                             None,
                             "",
@@ -117,14 +128,16 @@ class JobStore:
             try:
                 async with aiosqlite.connect(str(self.db_path)) as db:
                     row = await db.execute_fetchone(
-                        "SELECT kind, status, result, error, created_at, updated_at FROM jobs WHERE job_id = ?",
+                        "SELECT kind, tenant_id, status, result, error, created_at, updated_at "
+                        "FROM jobs WHERE job_id = ?",
                         (job_id,),
                     )
                     if row:
-                        kind, status, result, error, created_at, updated_at = row
+                        kind, tenant_id, status, result, error, created_at, updated_at = row
                         return Job(
                             job_id=job_id,
                             kind=kind,
+                            tenant_id=tenant_id or "",
                             status=status,
                             result=json.loads(result) if result else None,
                             error=error or "",
@@ -168,8 +181,10 @@ class JobStore:
             job.error = error
             job.updated_at = updated_at
 
-    async def submit(self, kind: str, coro_factory: Callable[[], Awaitable[dict]]) -> Job:
-        job = await self.create(kind)
+    async def submit(
+        self, kind: str, coro_factory: Callable[[], Awaitable[dict]], tenant_id: str = ""
+    ) -> Job:
+        job = await self.create(kind, tenant_id=tenant_id)
 
         async def _run() -> None:
             await self.update(job.job_id, "running")

@@ -5,7 +5,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { login, signup, logout, getCurrentUser } from "@/lib/api";
+import { login, signup, logout, getCurrentUser, deleteAllData } from "@/lib/api";
 
 export default function AccountPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -13,6 +13,8 @@ export default function AccountPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
 
   const [loggedIn, setLoggedIn] = useState(false);
   const [tenant, setTenant] = useState("");
@@ -68,6 +70,21 @@ export default function AccountPage() {
     setUserEmail("");
   };
 
+  const handleDeleteData = async () => {
+    if (!window.confirm("Are you sure you want to delete all uploaded PDFs and embeddings? This action cannot be undone.")) return;
+    setDeleting(true);
+    setDeleteSuccess(false);
+    setError("");
+    try {
+      await deleteAllData();
+      setDeleteSuccess(true);
+    } catch (e: any) {
+      setError(e.message || "Failed to delete data");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <AppShell eyebrow="Account" title="Your Settings" breadcrumb={["Workspace", "Account"]}>
       <div className="grid grid-cols-12 gap-8 mt-4">
@@ -89,9 +106,21 @@ export default function AccountPage() {
               </div>
 
               <div className="mt-10 hairline pt-6">
-                <Button onClick={handleLogout} variant="outline" className="font-mono text-[10px] uppercase tracking-widest text-destructive hover:bg-destructive/10">
+                <Button onClick={handleLogout} variant="outline" className="font-mono text-[10px] uppercase tracking-widest text-ink hover:bg-paper-tint">
                   Log out
                 </Button>
+              </div>
+
+              <div className="mt-10 hairline pt-6 border-destructive/20">
+                <span className="eyebrow text-destructive mb-2 block">Danger Zone</span>
+                <p className="text-xs text-ink-soft mb-4">
+                  Permanently delete all your uploaded PDFs, indexed embeddings, and metadata from the server. This action cannot be undone.
+                </p>
+                <Button onClick={handleDeleteData} disabled={deleting} variant="outline" className="font-mono text-[10px] uppercase tracking-widest text-destructive border-destructive/50 hover:bg-destructive hover:text-white transition-colors">
+                  {deleting ? "Deleting..." : "Delete All My Data"}
+                </Button>
+                {deleteSuccess && <div className="mt-3 text-emerald-600 font-mono text-xs bg-emerald-50 p-2 rounded">All data deleted successfully.</div>}
+                {error && <div className="mt-3 text-destructive font-mono text-xs bg-destructive/10 p-2 rounded">{error}</div>}
               </div>
             </div>
           ) : (
