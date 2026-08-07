@@ -39,6 +39,9 @@ ollama>=0.4.0
 # NOTE: google-generativeai has been removed — it is deprecated (Jan 2025).
 #       langchain-google-genai >=2.0 uses the new google-genai SDK internally.
 
+# Web search fallback (Tavily) — plain REST call, async client
+httpx>=0.27.0
+
 # Embeddings & Vector Search
 sentence-transformers>=3.0,<6.0   # CrossEncoder/SentenceTransformer API stable; cap next major
 qdrant-client>=1.18.0

@@ -36,10 +36,6 @@ class StorageBackend(ABC):
     def list_docs(self, tenant_id: str) -> list[str]:
         """List a tenant's doc_ids."""
 
-    @abstractmethod
-    def delete_tenant_data(self, tenant_id: str) -> None:
-        """Delete all PDFs for a tenant."""
-
 
 class LocalStorage(StorageBackend):
     def __init__(self, base: Path | None = None):
@@ -73,12 +69,6 @@ class LocalStorage(StorageBackend):
         if tenant_slug(tenant_id) == tenant_slug(settings.default_tenant):
             out += [p.stem for p in self.base.glob("*.pdf")]   # legacy flat = default
         return sorted(set(out))
-
-    def delete_tenant_data(self, tenant_id: str) -> None:
-        import shutil
-        sub = self.base / tenant_slug(tenant_id)
-        if sub.exists():
-            shutil.rmtree(sub)
 
 
 # A future S3 backend would implement StorageBackend by uploading to a bucket and

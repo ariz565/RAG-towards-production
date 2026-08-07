@@ -16,7 +16,9 @@ import asyncio
 import json
 import time
 
+from evals import attribution
 from evals.harness import RESULTS_DIR, bootstrap, load_golden_set, run_case
+from retrieval.base import hit_at_k, mrr, ndcg_at_k
 
 STRATEGIES = ["pageindex", "hybrid", "bm25_only", "vector_only"]
 
@@ -34,6 +36,9 @@ async def _bench_strategy(strategy: str, golden: list[dict]) -> dict:
     out_scope = [c for c in golden if c["type"] == "out_of_scope"]
 
     recalls, precisions, confs, latencies = [], [], [], []
+    hits, mrrs, ndcgs = [], [], []
+    verdicts: list[str] = []
+    per_case: list[dict] = []
     grounded = 0
     tokens = 0
     started = time.time()
@@ -48,6 +53,26 @@ async def _bench_strategy(strategy: str, golden: list[dict]) -> dict:
         latencies.append(pred["total_duration_ms"])
         tokens += pred["total_tokens"]
 
+        # hit_rate/MRR/nDCG need rank order, which retrieved_page_numbers (a sorted
+        # set) discards — ranked_page_numbers preserves it. Reuses retrieval/base.py's
+        # formulas rather than re-deriving them for the live harness.
+        expected = set(case["expected_pages"])
+        ranked = pred.get("ranked_page_numbers") or pred["retrieved_page_numbers"]
+        if expected:
+            hits.append(hit_at_k(ranked, expected, len(ranked) or 1))
+            mrrs.append(mrr(ranked, expected))
+            ndcgs.append(ndcg_at_k(ranked, expected, len(ranked) or 1))
+
+        verdict = attribution.classify_case(
+            case_type="in_scope", expected_pages=case["expected_pages"],
+            retrieved_pages=pred["retrieved_page_numbers"], grounded=pred["grounded"],
+            unsupported_claims=pred["unsupported_claims"], out_of_scope=False,
+        )
+        verdicts.append(verdict)
+        per_case.append({"id": case["id"], "question": case["question"], "verdict": verdict,
+                          "expected_pages": case["expected_pages"],
+                          "retrieved_pages": pred["retrieved_page_numbers"]})
+
     oos_ok = 0
     for case in out_scope:
         pred = await run_case(case, strategy=strategy)
@@ -55,17 +80,34 @@ async def _bench_strategy(strategy: str, golden: list[dict]) -> dict:
         latencies.append(pred["total_duration_ms"])
         tokens += pred["total_tokens"]
 
+        verdict = attribution.classify_case(
+            case_type="out_of_scope", expected_pages=[], retrieved_pages=[],
+            grounded=pred["grounded"], unsupported_claims=[], out_of_scope=pred["out_of_scope"],
+        )
+        verdicts.append(verdict)
+        per_case.append({"id": case["id"], "question": case["question"], "verdict": verdict,
+                          "expected_pages": [], "retrieved_pages": []})
+
     n = len(in_scope) or 1
+    m = len(hits) or 1  # cases with at least one expected page (excludes n/a cases)
     return {
         "strategy": strategy,
         "page_recall": round(sum(recalls) / n, 3),
         "page_precision": round(sum(precisions) / n, 3),
+        "hit_rate": round(sum(hits) / m, 3),
+        "mrr": round(sum(mrrs) / m, 3),
+        "ndcg": round(sum(ndcgs) / m, 3),
         "grounded_rate": round(grounded / n, 3),
         "avg_confidence": round(sum(confs) / n, 3),
         "out_of_scope_accuracy": round(oos_ok / len(out_scope), 3) if out_scope else 1.0,
         "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0.0,
         "total_tokens": tokens,
         "wall_seconds": round(time.time() - started, 1),
+        # Retrieval-vs-generation attribution: how many failures are retrieval's
+        # fault (right pages never found) vs. generation's (right pages found,
+        # answer still wrong/ungrounded) — see attribution.py.
+        "attribution": attribution.summarize(verdicts),
+        "cases": per_case,
     }
 
 
@@ -73,6 +115,9 @@ _COLUMNS = [
     ("strategy", "Strategy"),
     ("page_recall", "Page Recall"),
     ("page_precision", "Page Prec."),
+    ("hit_rate", "Hit Rate"),
+    ("mrr", "MRR"),
+    ("ndcg", "nDCG"),
     ("grounded_rate", "Grounded"),
     ("avg_confidence", "Avg Conf."),
     ("out_of_scope_accuracy", "OOS Acc."),
@@ -95,10 +140,24 @@ def _to_markdown(rows: list[dict]) -> str:
     ]
     for row in rows:
         if "error" in row:
-            lines.append(f"| {row['strategy']} | error: {row['error']} | | | | | | |")
+            blanks = " | ".join("" for _ in range(len(_COLUMNS) - 2))
+            lines.append(f"| {row['strategy']} | error: {row['error']} | {blanks} |")
             continue
         cells = [str(row.get(key, "")) for key, _ in _COLUMNS]
         lines.append("| " + " | ".join(cells) + " |")
+    lines.append("")
+
+    lines.append("## Retrieval-vs-generation attribution")
+    lines.append("")
+    lines.append("_Is a bad answer retrieval's fault or generation's? retrieval_miss = the "
+                  "right pages were never found; generation_miss = they were found and the "
+                  "answer was still wrong/ungrounded._")
+    lines.append("")
+    for row in rows:
+        attr = row.get("attribution")
+        if not attr:
+            continue
+        lines.append(f"**{row['strategy']}**: " + ", ".join(f"{k}={v}" for k, v in attr.items() if v))
     lines.append("")
     return "\n".join(lines)
 

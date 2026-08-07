@@ -10,7 +10,9 @@ every time — nothing it learns on question 1 helps with question 50. Karpathy'
 fix: have an LLM compile raw sources into a small, structured, cross-linked
 markdown wiki *once*, then keep it current. Querying means reading tidy notes,
 not re-searching a haystack, and every query can *improve* the notes for next
-time.  — this module is a different
+time. See `code-n-concepts/andrej-karpathy.md` and `karpathy-second-brain.md` for
+the full pattern this implements, and `116-loop-engineering-...md` for a
+Claude-Agent-SDK version of the same idea — this module is a different
 implementation of that same idea with no SDK, no tool-calling loop, and one
 structural addition file 116 doesn't have (see "Epistemic integrity" below).
 

@@ -73,7 +73,7 @@ async def analyze(query: str) -> QueryAnalysis:
     try:
         from app.services.llm import chat_json
 
-        data, _ = await chat_json(prompts.query_understanding(normalized), temperature=0)
+        data, _ = await chat_json(prompts.query_understanding("", normalized), temperature=0)
         if isinstance(data, dict):
             cand = str(data.get("intent", "")).lower().strip()
             if cand in INTENTS:

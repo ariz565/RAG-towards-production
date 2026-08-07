@@ -10,7 +10,7 @@ from __future__ import annotations
 from embeddings.base import Embedder, EmbedderConfig, cosine
 from embeddings.dense import HashEmbedder
 
-from retrieval.base import Doc, Retriever, RetrievedDoc
+from retrieval.base import Doc, Retriever, RetrievedDoc, matches_filter
 
 
 class DenseRetriever(Retriever):
@@ -24,13 +24,14 @@ class DenseRetriever(Retriever):
         self._docs = docs
         self._vectors = self.embedder.embed_documents([d.text for d in docs])
 
-    def search(self, query: str, k: int = 10) -> list[RetrievedDoc]:
+    def search(self, query: str, k: int = 10, filter_metadata: dict | None = None) -> list[RetrievedDoc]:
         qv = self.embedder.embed_query(query)
         scored = [
             (i, cosine(qv, v)) for i, v in enumerate(self._vectors)
+            if matches_filter(self._docs[i].metadata, filter_metadata)
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
         return [
-            RetrievedDoc(self._docs[i].id, self._docs[i].text, s, rank + 1, "dense")
+            RetrievedDoc(self._docs[i].id, self._docs[i].text, s, rank + 1, "dense", self._docs[i].metadata)
             for rank, (i, s) in enumerate(scored[:k])
         ]

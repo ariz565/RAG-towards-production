@@ -51,16 +51,21 @@ scores. Set `EVAL_JUDGE_MODEL` to override the judge model name.
 
 ## Domain-agnostic note
 
-The golden set targets the **currently indexed document** (a Business Layer
-architecture doc). The pipeline is now document-agnostic: the guardrail, answer,
-and redirect prompts adapt to a derived **domain profile**
+The golden set targets the **currently indexed document**:
+`data/pdf/vision-architecture.pdf`, a plain-text PDF rendering of this repo's own
+`docs/ARCHITECTURE.md` (committed as an eval fixture — see `.gitignore`'s
+exception for it). The pipeline is document-agnostic: the guardrail, answer, and
+redirect prompts adapt to a derived **domain profile**
 (`data/index/<doc>_profile.json`, regenerate with `python -m app.cli profile`).
 To evaluate a different corpus, index it, regenerate the profile, and replace
 `golden_set.jsonl` with Q&As for that document.
 
 ## Roadmap
 
-This seed has 15 cases (13 in-scope + 2 negatives). Per the vision's Definition of
-Done, grow it to **≥50** before claiming a published accuracy number. The
-`run_evals.py` per-strategy output is the seed of the **PageIndex-vs-Hybrid public
-benchmark** (Phase E).
+`golden_set.jsonl` has 65 cases (61 in-scope + 4 negatives), each answer traceable
+to a specific page of the indexed corpus — past the ≥50 Definition-of-Done bar.
+The `run_evals.py` per-strategy output is the seed of the **PageIndex-vs-Hybrid
+public benchmark** (Phase E); `attribution.py` additionally classifies every
+in-scope case as a retrieval miss, generation miss, partial retrieval, or ok, so a
+regression can be diagnosed as "we stopped finding the right pages" vs. "we found
+them and the model still got it wrong" instead of just a recall number dropping.

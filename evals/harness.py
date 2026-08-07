@@ -63,6 +63,7 @@ async def run_case(case: dict, *, strategy: str | None = None) -> dict:
         "actual_output": res.get("answer", ""),
         "retrieval_context": res.get("retrieval_context", []),
         "retrieved_page_numbers": res.get("retrieved_page_numbers", []),
+        "ranked_page_numbers": res.get("ranked_page_numbers", []),
         "out_of_scope": res.get("out_of_scope", False),
         "grounded": res.get("grounded", False),
         "refused": res.get("refused", False),

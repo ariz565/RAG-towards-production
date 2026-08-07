@@ -28,6 +28,7 @@ class PipelineState(TypedDict):
     # ── Query Tracking ──────────────────────────────────────
     original_query: str
     rewritten_query: str | None
+    metadata_filter: dict | None  # scoped retrieval — chunk metadata to filter on
 
     # ── HITL clarification (Phase E) ────────────────────────
     clarified: bool          # True once ambiguity has been resolved/skipped
@@ -63,6 +64,8 @@ class PipelineState(TypedDict):
     # ── Verification (Phase B) ──────────────────────────────
     unsupported_claims: list[str]  # claims the grounding check could not verify
     grounded: bool                 # True if confidence ≥ accept threshold
+    web_search_used: bool          # True if web_search_fallback_node produced the answer
+    cache_hit: bool                # True if semantic_cache_lookup_node produced the answer
 
     # ── Pipeline Control ────────────────────────────────────
     retrieval_attempts: int

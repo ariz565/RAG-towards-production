@@ -135,3 +135,20 @@ def certify(stem: str, certified: bool = True) -> dict | None:
     except Exception as e:  # pragma: no cover
         logger.warning(f"Lineage certify failed for {stem}: {e}")
     return data
+
+
+def update_after_reindex(stem: str, *, content_sha256: str, size_bytes: int, chunk_count: int) -> dict | None:
+    """Record a document's new content hash/size/chunk count after a re-index
+    (see reindex_watcher.py) — same load-mutate-save shape as certify()."""
+    data = load(stem)
+    if data is None:
+        return None
+    data["content_sha256"] = content_sha256
+    data["size_bytes"] = size_bytes
+    data["chunk_count"] = chunk_count
+    try:
+        with open(_lineage_path(stem), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"Lineage update failed for {stem}: {e}")
+    return data

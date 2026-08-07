@@ -234,6 +234,7 @@ class HybridIndex:
                     "page_numbers": chunk["page_numbers"],
                     "section_title": chunk["section_title"],
                     "chunk_index": chunk["chunk_index"],
+                    "metadata": chunk.get("metadata") or {},
                 },
             ))
             if len(points) >= batch_size:
@@ -263,6 +264,7 @@ class HybridIndex:
         *,
         strategy: RetrievalStrategy | None = None,
         top_k: int | None = None,
+        filter_metadata: dict | None = None,
     ) -> list[RetrievalResult]:
         """Search using the specified retrieval strategy.
 
@@ -270,6 +272,8 @@ class HybridIndex:
             query: The search query.
             strategy: Override active strategy.
             top_k: Number of results to return.
+            filter_metadata: Restrict to chunks whose metadata matches every
+                key/value pair given (AND match), e.g. {"source": "policy.pdf"}.
 
         Returns:
             Sorted list of RetrievalResult objects.
@@ -278,16 +282,21 @@ class HybridIndex:
         top_k = top_k or settings.retrieval_top_k
 
         if strategy == RetrievalStrategy.BM25_ONLY:
-            return self._search_bm25(query, top_k=settings.bm25_top_k)[:top_k]
+            return self._search_bm25(query, top_k=settings.bm25_top_k, filter_metadata=filter_metadata)[:top_k]
         elif strategy == RetrievalStrategy.VECTOR_ONLY:
-            return await self._search_vector(query, top_k=settings.vector_top_k)
+            return await self._search_vector(query, top_k=settings.vector_top_k, filter_metadata=filter_metadata)
         elif strategy == RetrievalStrategy.HYBRID:
-            return await self._search_hybrid(query, top_k=top_k)
+            return await self._search_hybrid(query, top_k=top_k, filter_metadata=filter_metadata)
         else:
             raise ValueError(f"Strategy {strategy} not handled by HybridIndex")
 
-    def _search_bm25(self, query: str, top_k: int = 20) -> list[RetrievalResult]:
-        """BM25 sparse retrieval."""
+    def _search_bm25(self, query: str, top_k: int = 20, filter_metadata: dict | None = None) -> list[RetrievalResult]:
+        """BM25 sparse retrieval.
+
+        BM25Okapi scores its whole indexed corpus in one call and has no
+        native filtering, so a metadata filter restricts the candidate pool
+        (before ranking, not after) rather than the library doing it for us.
+        """
         if not self._bm25:
             logger.warning("BM25 index not built")
             return []
@@ -295,8 +304,11 @@ class HybridIndex:
         tokens = _tokenize(query)
         scores = self._bm25.get_scores(tokens)
 
-        # Get top-k indices
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+        candidate_idx = range(len(scores))
+        if filter_metadata:
+            candidate_idx = [i for i in candidate_idx if _matches_filter(self._chunks[i].get("metadata"), filter_metadata)]
+
+        top_indices = sorted(candidate_idx, key=lambda i: scores[i], reverse=True)[:top_k]
 
         results = []
         for idx in top_indices:
@@ -309,12 +321,18 @@ class HybridIndex:
                     page_numbers=chunk["page_numbers"],
                     section_title=chunk["section_title"],
                     source="bm25",
+                    metadata=chunk.get("metadata") or {},
                 ))
 
         return results
 
-    async def _search_vector(self, query: str, top_k: int = 20) -> list[RetrievalResult]:
-        """Vector (dense) retrieval via Qdrant."""
+    async def _search_vector(self, query: str, top_k: int = 20, filter_metadata: dict | None = None) -> list[RetrievalResult]:
+        """Vector (dense) retrieval via Qdrant.
+
+        Filtering is Qdrant's own query_filter (server-side, over the payload's
+        nested `metadata.*` fields) — not a Python post-filter — so it narrows
+        the ANN search itself rather than discarding hits after the fact.
+        """
         if not self._qdrant_client or not self._collection_ready:
             logger.warning("Qdrant not ready")
             return []
@@ -326,6 +344,7 @@ class HybridIndex:
         hits = self._qdrant_client.query_points(
             collection_name=self._collection,
             query=query_vector,
+            query_filter=_qdrant_metadata_filter(filter_metadata),
             limit=top_k,
         ).points
 
@@ -339,11 +358,12 @@ class HybridIndex:
                 page_numbers=payload.get("page_numbers", []),
                 section_title=payload.get("section_title", ""),
                 source="vector",
+                metadata=payload.get("metadata") or {},
             ))
 
         return results
 
-    async def _search_hybrid(self, query: str, top_k: int = 10) -> list[RetrievalResult]:
+    async def _search_hybrid(self, query: str, top_k: int = 10, filter_metadata: dict | None = None) -> list[RetrievalResult]:
         """Hybrid search: BM25 + Vector → RRF fusion.
 
         RRF formula: score = 1/(rank_i + k) for each system, then sum.
@@ -351,8 +371,8 @@ class HybridIndex:
         # Get candidates from both systems. Each system must surface at least
         # `top_k` so the fused pool can actually reach the requested size even
         # when the two systems overlap heavily.
-        bm25_results = self._search_bm25(query, top_k=max(settings.bm25_top_k, top_k))
-        vector_results = await self._search_vector(query, top_k=max(settings.vector_top_k, top_k))
+        bm25_results = self._search_bm25(query, top_k=max(settings.bm25_top_k, top_k), filter_metadata=filter_metadata)
+        vector_results = await self._search_vector(query, top_k=max(settings.vector_top_k, top_k), filter_metadata=filter_metadata)
 
         # RRF fusion
         rrf_scores: dict[str, float] = {}
@@ -531,7 +551,8 @@ class HybridIndex:
                         payload={"chunk_id": c.id, "text": c.text,
                                  "page_numbers": c.page_numbers,
                                  "section_title": c.section_title,
-                                 "chunk_index": c.chunk_index},
+                                 "chunk_index": c.chunk_index,
+                                 "metadata": c.metadata or {}},
                     )
                     for c, v in zip(to_embed, vectors)
                 ]
@@ -561,6 +582,27 @@ def _tokenize(text: str) -> list[str]:
     import re
     words = re.findall(r"\b\w+\b", text.lower())
     return [w for w in words if len(w) > 1]
+
+
+def _matches_filter(metadata: dict | None, filter_metadata: dict) -> bool:
+    """AND match: every key in filter_metadata must be present and equal in metadata."""
+    metadata = metadata or {}
+    return all(metadata.get(k) == v for k, v in filter_metadata.items())
+
+
+def _qdrant_metadata_filter(filter_metadata: dict | None):
+    """Build a Qdrant Filter over the payload's nested metadata.* fields, or
+    None (no filter) — Qdrant's own query_filter, not a Python post-filter."""
+    if not filter_metadata:
+        return None
+    from qdrant_client import models
+
+    return models.Filter(
+        must=[
+            models.FieldCondition(key=f"metadata.{k}", match=models.MatchValue(value=v))
+            for k, v in filter_metadata.items()
+        ]
+    )
 
 
 def _point_id(chunk_id: str) -> int:

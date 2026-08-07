@@ -55,6 +55,7 @@ class DocumentBundle:
     hybrid_index: HybridIndex
     profile: DomainProfile
     indexed_at: str = ""        # data freshness (ISO-8601)
+    stem: str = ""              # artifact namespace this bundle was loaded from
 
     @property
     def key(self) -> str:
@@ -199,7 +200,7 @@ class CorpusRegistry:
                     ).isoformat()
                     break
 
-        bundle = DocumentBundle(tenant_id, doc_id, document_index, hybrid_index, profile, indexed_at)
+        bundle = DocumentBundle(tenant_id, doc_id, document_index, hybrid_index, profile, indexed_at, stem)
         if not bundle.is_ready:
             logger.info(f"No indexes found for '{stem}' — skipping.")
             return None
@@ -230,51 +231,6 @@ class CorpusRegistry:
                 logger.warning(f"Failed to load bundle '{stem}': {e}")
         logger.info(f"Registry: {loaded} document(s) loaded across tenants.")
         return loaded
-
-    async def delete_tenant(self, tenant_id: str) -> int:
-        """Delete all bundles and associated data for a tenant."""
-        bundles_to_delete = [b for b in self._bundles.values() if b.tenant_id == tenant_id]
-        deleted_count = 0
-
-        for bundle in bundles_to_delete:
-            stem = namespace(bundle.tenant_id, bundle.doc_id)
-            
-            # 1. Delete Qdrant collection
-            if bundle.hybrid_index and bundle.hybrid_index._qdrant_client:
-                try:
-                    if bundle.hybrid_index._qdrant_client.collection_exists(bundle.hybrid_index._collection):
-                        bundle.hybrid_index._qdrant_client.delete_collection(bundle.hybrid_index._collection)
-                except Exception as e:
-                    logger.warning(f"Failed to delete Qdrant collection for {stem}: {e}")
-
-            # 2. Delete local files (PageIndex, BM25)
-            index_file = settings.index_path / f"{stem}_index.json"
-            if index_file.exists():
-                try:
-                    index_file.unlink()
-                except Exception:
-                    pass
-                
-            bm25_file = settings.bm25_path / f"{stem}_bm25.pkl"
-            if bm25_file.exists():
-                try:
-                    bm25_file.unlink()
-                except Exception:
-                    pass
-                
-            chunks_file = settings.bm25_path / f"{stem}_hybrid_chunks.json"
-            if chunks_file.exists():
-                try:
-                    chunks_file.unlink()
-                except Exception:
-                    pass
-
-            # 3. Remove from registry memory
-            self._bundles.pop(bundle.key, None)
-            deleted_count += 1
-            
-        logger.info(f"Registry: Deleted {deleted_count} bundles for tenant '{tenant_id}'.")
-        return deleted_count
 
 
 # Singleton registry

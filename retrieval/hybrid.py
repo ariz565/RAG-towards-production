@@ -34,12 +34,12 @@ class HybridRetriever(Retriever):
         self.dense.index(docs)
         self._by_id = {d.id: d for d in docs}
 
-    def search(self, query: str, k: int = 10) -> list[RetrievedDoc]:
-        bm25_ids = [d.id for d in self.bm25.search(query, self.prefetch)]
-        dense_ids = [d.id for d in self.dense.search(query, self.prefetch)]
+    def search(self, query: str, k: int = 10, filter_metadata: dict | None = None) -> list[RetrievedDoc]:
+        bm25_ids = [d.id for d in self.bm25.search(query, self.prefetch, filter_metadata)]
+        dense_ids = [d.id for d in self.dense.search(query, self.prefetch, filter_metadata)]
         fused = reciprocal_rank_fusion([bm25_ids, dense_ids], k=self.rrf_k, weights=self.weights)
         return [
-            RetrievedDoc(doc_id, self._by_id[doc_id].text, score, rank + 1, "hybrid")
+            RetrievedDoc(doc_id, self._by_id[doc_id].text, score, rank + 1, "hybrid", self._by_id[doc_id].metadata)
             for rank, (doc_id, score) in enumerate(fused[:k])
             if doc_id in self._by_id
         ]

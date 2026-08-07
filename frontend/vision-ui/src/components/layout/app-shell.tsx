@@ -15,6 +15,7 @@ const navItems = [
   { to: "/config", num: "06", label: "Configuration" },
   { to: "/account", num: "07", label: "Account" },
   { to: "/graph", num: "08", label: "Graph" },
+  { to: "/retrieval-quality", num: "09", label: "Retrieval Quality" },
 ] as const;
 
 function VisionMark() {

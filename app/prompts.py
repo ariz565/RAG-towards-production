@@ -237,6 +237,28 @@ def query_understanding(history: str, current_query: str) -> str:
         '"rewritten": "<search query>", "reasoning": "<brief>"}'
     )
 
+def web_search_answer(query: str, web_results: str) -> str:
+    return (
+        "The document could not answer this question with confidence, so the "
+        "system fell back to a web search. Answer using ONLY the web results "
+        "below, and be concise. If they don't actually answer the question, say so.\n\n"
+        f"Question: {query}\n\n"
+        f"Web results:\n{web_results}\n\n"
+        "Reply with the answer text only, no preamble."
+    )
+
+
+def query_expansion(query: str, n: int) -> str:
+    return (
+        f"Generate {n} alternative phrasings of the search query below, each one "
+        "a paraphrase that preserves the original meaning exactly (different "
+        "wording/vocabulary, not different scope). Do not add assumptions or "
+        "narrow/broaden the question.\n\n"
+        f"Query: {query}\n\n"
+        'Reply JSON: {"variants": ["<paraphrase 1>", "<paraphrase 2>", ...]}'
+    )
+
+
 def summarize_conversation(summary: str, new_messages: str) -> str:
     return (
         "You are compressing a conversation history. Combine the existing summary with the new messages "

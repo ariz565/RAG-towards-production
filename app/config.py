@@ -315,6 +315,38 @@ class Settings(BaseSettings):
     query_understanding_enabled: bool = True
     query_rewrite_enabled: bool = True
 
+    # ── Query expansion (multi-query, RAG-Fusion) ──
+    # Generates paraphrases of the search query, retrieves for each, and fuses
+    # with RRF — widens recall when the original phrasing misses relevant chunks.
+    query_expansion_enabled: bool = True
+    query_expansion_variants: int = 2
+
+    # ── Web search fallback (Tavily) ──
+    # When grounding_check would otherwise refuse (retries exhausted, confidence
+    # still below the refuse threshold), try one web search before declining.
+    # Opt-in: requires an API key, and a web-sourced answer is never presented
+    # as grounded in the document.
+    web_search_fallback_enabled: bool = False
+    tavily_api_key: str = ""
+
+    # ── Semantic answer cache ──
+    # Reuse a past answer when a new query is close enough in *meaning* (not
+    # just exact text) to one already answered for the same tenant+document.
+    # Opt-in: a wrong cache hit silently serves a stale/wrong answer, which is
+    # worse than a slower correct one, so this stays off until explicitly enabled.
+    semantic_cache_enabled: bool = False
+    semantic_cache_threshold: float = 0.95   # cosine similarity floor to treat as "same question"
+
+    # ── Automatic reindex on source-document change ──
+    # Periodically checks each loaded document's source PDF against its
+    # recorded content hash (lineage.py) and incrementally re-indexes
+    # (HybridIndex.update — same method app/cli.py's update-hybrid uses) if it
+    # changed. On by default: unlike the cache/fallback features above, this
+    # only closes a correctness gap (a stale index silently going unnoticed
+    # until someone remembers to run the CLI), it doesn't introduce new risk.
+    auto_reindex_enabled: bool = True
+    auto_reindex_interval_seconds: int = 300
+
     # ── Document routing (multi-doc Q&A within a tenant) ────
     # When /api/ask has no doc_id, route the query to the best-matching document
     # by scoring against each doc's domain profile. Below min_score → no route.

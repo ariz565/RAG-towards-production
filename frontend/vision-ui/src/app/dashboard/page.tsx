@@ -101,6 +101,16 @@ export default function DashboardPage() {
     >
       <div className="flex flex-col gap-6">
 
+        {/* This page is a UI demo: every metric below is generated client-side
+            (Math.random()/hardcoded), not read from any backend. There is no
+            multi-tenant billing, GPU fleet, or live traffic system behind this
+            app to report real numbers for. For real retrieval-quality metrics
+            (grounding, recall, MRR/NDCG) backed by the actual eval benchmark,
+            see the Streamlit app's Retrieval Quality page instead. */}
+        <div className="paper-card bg-amber-500/10 border border-amber-500/30 p-3 rounded-lg font-mono text-[10px] text-amber-600 uppercase tracking-widest">
+          Simulated data — UI demo only, not wired to a backend
+        </div>
+
         {/* Tier 1: 8-Metric Hyper-Dense KPI Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
           <div className="paper-card bg-paper border border-emerald-500/30 p-3 rounded-lg flex flex-col justify-between relative overflow-hidden">

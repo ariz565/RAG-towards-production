@@ -11,7 +11,7 @@ import math
 import re
 from collections import Counter
 
-from retrieval.base import Doc, Retriever, RetrievedDoc
+from retrieval.base import Doc, Retriever, RetrievedDoc, matches_filter
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -45,10 +45,12 @@ class BM25Retriever(Retriever):
             term: math.log(1 + (n - dfi + 0.5) / (dfi + 0.5)) for term, dfi in df.items()
         }
 
-    def search(self, query: str, k: int = 10) -> list[RetrievedDoc]:
+    def search(self, query: str, k: int = 10, filter_metadata: dict | None = None) -> list[RetrievedDoc]:
         q_terms = _tokenize(query)
         scored: list[tuple[int, float]] = []
         for i, tf in enumerate(self._tf):
+            if not matches_filter(self._docs[i].metadata, filter_metadata):
+                continue
             score = 0.0
             dl = self._doc_len[i]
             for term in q_terms:
@@ -63,6 +65,6 @@ class BM25Retriever(Retriever):
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return [
-            RetrievedDoc(self._docs[i].id, self._docs[i].text, s, rank + 1, "bm25")
+            RetrievedDoc(self._docs[i].id, self._docs[i].text, s, rank + 1, "bm25", self._docs[i].metadata)
             for rank, (i, s) in enumerate(scored[:k])
         ]

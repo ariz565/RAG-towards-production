@@ -57,12 +57,7 @@ export default function ChatPage() {
     const savedActive = localStorage.getItem("vision_activeSessionId");
     
     if (savedHistory) {
-      try { 
-        const parsed = JSON.parse(savedHistory);
-        // Reset loading state for all items when reloading the page to prevent being stuck
-        const resetHistory = parsed.map((item: any) => ({ ...item, loading: false }));
-        setSessionHistory(resetHistory); 
-      } catch (e) {}
+      try { setSessionHistory(JSON.parse(savedHistory)); } catch (e) {}
     }
     if (savedThread) setThreadId(savedThread);
     if (savedActive) setActiveSessionId(savedActive);
@@ -171,7 +166,6 @@ export default function ChatPage() {
       setSessionHistory(prev => prev.map(s => s.id === newItemId ? { ...s, answerText: "[Error]: Failed to communicate with the backend.", loading: false } : s));
     } finally {
       setClarificationAnswer("");
-      setSessionHistory(prev => prev.map(s => s.id === newItemId ? { ...s, loading: false } : s));
     }
   };
 

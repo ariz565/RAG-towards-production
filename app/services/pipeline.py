@@ -38,6 +38,8 @@ from app.services.observability import span
 from app.services.registry import clear_document, current_bundle, registry, use_document
 from app.services.reranker import reranker
 from app.services.tree_search import rewrite_query, search_tree
+from app.services import semantic_cache, web_search
+from retrieval.fusion import reciprocal_rank_fusion
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +103,35 @@ def _split_pages_into_passages(pages: list[dict]) -> list[dict]:
     return out
 
 
+# Node-result keys worth surfacing as span attributes for the retrieval/generation
+# nodes specifically — so a trace answers "what did retrieval get vs. what did
+# generation do" directly, without opening the pipeline_steps JSON by hand. List
+# values are recorded as a count (the list contents themselves aren't attribute-safe).
+_TRACE_ATTRIBUTE_KEYS: dict[str, tuple[str, ...]] = {
+    "hybrid_retrieval": ("hybrid_results", "retrieved_pages"),
+    "rerank": ("retrieved_pages",),
+    "answer_generation": ("citations",),
+    "grounding_check": ("confidence", "grounded", "unsupported_claims"),
+    "web_search_fallback": ("web_search_used",),
+    "semantic_cache_lookup": ("cache_hit",),
+}
+
+
 def _traced(name: str, fn):
-    """Wrap a pipeline node so each execution emits an OTel span."""
+    """Wrap a pipeline node so each execution emits an OTel span, enriched with
+    retrieval/generation metrics for the nodes listed in _TRACE_ATTRIBUTE_KEYS."""
 
     @functools.wraps(fn)
     async def wrapper(state):
-        with span(f"node.{name}", {"agent.node": name}):
-            return await fn(state)
+        with span(f"node.{name}", {"agent.node": name}) as sp:
+            result = await fn(state)
+            for key in _TRACE_ATTRIBUTE_KEYS.get(name, ()):
+                value = result.get(key)
+                if isinstance(value, list):
+                    sp.set_attribute(f"agent.{key}_count", len(value))
+                elif value is not None:
+                    sp.set_attribute(f"agent.{key}", value)
+            return result
 
     return wrapper
 
@@ -303,6 +327,36 @@ async def tree_search_node(state: PipelineState) -> dict:
 # Search using BM25 + Qdrant vector with RRF fusion
 # ═══════════════════════════════════════════════════════════════════════
 
+async def _expanded_search(bundle, query: str, strategy, pool_k: int, filter_metadata: dict | None = None) -> list:
+    """Multi-query expansion (RAG-Fusion): paraphrase the query, retrieve for
+    each variant plus the original, and RRF-fuse by chunk_id. Widens recall
+    when the original phrasing misses relevant chunks. Falls back to the
+    original query alone on any LLM failure."""
+    queries = [query]
+    try:
+        data, _ = await chat_json(
+            prompts.query_expansion(query, settings.query_expansion_variants), temperature=0.3
+        )
+        if isinstance(data, dict):
+            variants = [str(v).strip() for v in data.get("variants", []) if str(v).strip()]
+            queries += variants[: settings.query_expansion_variants]
+    except Exception as e:
+        logger.debug(f"Query expansion fell back to single query: {e}")
+
+    result_lists = await asyncio.gather(
+        *[bundle.hybrid_index.search(q, strategy=strategy, top_k=pool_k, filter_metadata=filter_metadata) for q in queries]
+    )
+    by_id = {}
+    ranked_lists = []
+    for results_for_q in result_lists:
+        ranked_lists.append([r.chunk_id for r in results_for_q])
+        for r in results_for_q:
+            by_id.setdefault(r.chunk_id, r)
+
+    fused = reciprocal_rank_fusion(ranked_lists, k=60)
+    return [by_id[chunk_id] for chunk_id, _ in fused[:pool_k] if chunk_id in by_id]
+
+
 async def hybrid_retrieval_node(state: PipelineState) -> dict:
     """Retrieve relevant chunks using BM25 + Vector hybrid search.
 
@@ -322,8 +376,14 @@ async def hybrid_retrieval_node(state: PipelineState) -> dict:
     # not just the top handful that fused retrieval already favored.
     pool_k = settings.rerank_candidates if settings.rerank_enabled else settings.retrieval_top_k
 
+    filter_metadata = state.get("metadata_filter")
     bundle = current_bundle()
-    results = await bundle.hybrid_index.search(query, strategy=strategy, top_k=pool_k) if bundle else []
+    if not bundle:
+        results = []
+    elif settings.query_expansion_enabled and settings.query_expansion_variants > 0:
+        results = await _expanded_search(bundle, query, strategy, pool_k, filter_metadata)
+    else:
+        results = await bundle.hybrid_index.search(query, strategy=strategy, top_k=pool_k, filter_metadata=filter_metadata)
 
     duration = (time.time() - start) * 1000
 
@@ -415,6 +475,33 @@ async def page_retrieval_node(state: PipelineState) -> dict:
     }
 
 
+def _expand_to_parent_pages(pages: list[dict], bundle) -> list[dict]:
+    """Small-to-big context expansion (parent-child chunking, see
+    chunking/parent_child.py's lab version of the same idea): retrieval and
+    reranking already happened at chunk precision — a cross-encoder scores
+    passages far better than whole pages — but the LLM answering the question
+    gets the full parent page's text, not just the matched chunk, so it isn't
+    missing surrounding context the small chunk cut off.
+
+    Reuses DocumentIndex.get_page() (already built for the PageIndex strategy)
+    rather than re-parsing the PDF. Falls back to the chunk's own text when
+    PageIndex wasn't built for this document — no page_texts to expand into.
+    A page that's already full-page text (the PageIndex strategy's own
+    retrieved_pages) is left alone: parent text would just equal child text.
+    """
+    if not bundle or not bundle.document_index.is_loaded:
+        return pages
+    expanded = []
+    for p in pages:
+        page_num = p.get("page_number")
+        parent = bundle.document_index.get_page(page_num) if page_num else None
+        if parent and parent["text"] and parent["text"] != p.get("text"):
+            expanded.append({**p, "text": parent["text"], "child_text": p.get("text")})
+        else:
+            expanded.append(p)
+    return expanded
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # NODE 3.5: RERANK (both strategies)
 # Cross-encoder rerank of retrieved candidates → keep the most relevant few
@@ -459,6 +546,8 @@ async def rerank_node(state: PipelineState) -> dict:
 
         reranked = await mmr_select(query, reranked, k=final_k)
         diversified = True
+
+    reranked = _expand_to_parent_pages(reranked, current_bundle())
 
     duration = (time.time() - start) * 1000
 
@@ -628,6 +717,22 @@ async def grounding_check_node(state: PipelineState) -> dict:
 
     if grounded:
         routing = "complete"
+        # Cache only genuinely grounded answers — never a low-confidence
+        # "accepted anyway" fallback (routing can also be "complete" for that
+        # case below), which would propagate uncertainty as a reusable fact.
+        bundle = current_bundle()
+        if settings.semantic_cache_enabled and bundle:
+            query = state.get("rewritten_query") or state["original_query"]
+            try:
+                await semantic_cache.put(bundle.tenant_id, bundle.doc_id, query, {
+                    "answer": state.get("answer", ""),
+                    "citations": state.get("citations", []),
+                    "retrieved_pages": state.get("retrieved_pages", []),
+                    "confidence": confidence,
+                    "grounded": True,
+                })
+            except Exception as e:
+                logger.debug(f"Semantic cache write failed (non-fatal): {e}")
     elif attempts < settings.max_retrieval_attempts:
         routing = "retry"
     elif confidence < policy.grounding_refuse_threshold:
@@ -724,6 +829,61 @@ async def out_of_scope_node(state: PipelineState) -> dict:
         "answer": answer,
         "citations": [],
         "confidence": 1.0,  # Confident it's out of scope
+        "messages": [AIMessage(content=answer)],
+        "pipeline_steps": [step],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# NODE 7b: WEB SEARCH FALLBACK (conditional, only when grounding would refuse)
+# Last resort before declining — opt-in, and never presented as document-grounded
+# ═══════════════════════════════════════════════════════════════════════
+
+async def web_search_fallback_node(state: PipelineState) -> dict:
+    """Try one web search before declining. Opt-in (web_search_fallback_enabled)
+    since it needs a Tavily API key; a web-sourced answer is explicitly labeled
+    as such and never marked `grounded` against the document."""
+    start = time.time()
+    query = state["original_query"]
+
+    def _skip(reason: str) -> dict:
+        return {
+            "pipeline_steps": [{
+                "node_name": "web_search_fallback", "status": "completed",
+                "thinking": reason, "result": "skipped",
+                "duration_ms": (time.time() - start) * 1000, "tokens_used": 0,
+            }],
+        }
+
+    if not settings.web_search_fallback_enabled:
+        return _skip("Disabled.")
+
+    results = await web_search.search(query)
+    if not results:
+        return _skip("No web results (or not configured).")
+
+    web_text = "\n\n".join(f"[{r['title']}]({r['url']})\n{r['content']}" for r in results)
+    response = await chat(prompts.web_search_answer(query, web_text), temperature=0)
+    answer = (
+        f"{response.content.strip()}\n\n"
+        f"_This answer came from a web search, not the document — it hasn't been "
+        f"verified against your source material._"
+    )
+
+    step = {
+        "node_name": "web_search_fallback",
+        "status": "completed",
+        "thinking": f"Document grounding was insufficient; answered from {len(results)} web result(s) instead.",
+        "result": "Answered from web search.",
+        "duration_ms": (time.time() - start) * 1000,
+        "tokens_used": response.tokens_used,
+    }
+
+    return {
+        "answer": answer,
+        "citations": [],
+        "grounded": False,  # honest: grounded in the web, not the document
+        "web_search_used": True,
         "messages": [AIMessage(content=answer)],
         "pipeline_steps": [step],
     }
@@ -906,6 +1066,50 @@ async def blocked_node(state: PipelineState) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# NODE 3.5: SEMANTIC CACHE LOOKUP (conditional, opt-in)
+# After safety/guardrail/clarify have run on THIS query — never skip those on
+# the strength of a similar past query — check for a reusable prior answer.
+# ═══════════════════════════════════════════════════════════════════════
+
+async def semantic_cache_lookup_node(state: PipelineState) -> dict:
+    start = time.time()
+    query = state.get("rewritten_query") or state["original_query"]
+    bundle = current_bundle()
+
+    def _skip(reason: str) -> dict:
+        return {
+            "pipeline_steps": [{
+                "node_name": "semantic_cache_lookup", "status": "completed",
+                "thinking": reason, "result": "miss",
+                "duration_ms": (time.time() - start) * 1000, "tokens_used": 0,
+            }],
+        }
+
+    if not settings.semantic_cache_enabled or not bundle:
+        return _skip("Disabled." if not settings.semantic_cache_enabled else "No active document.")
+
+    cached = await semantic_cache.get(bundle.tenant_id, bundle.doc_id, query)
+    if not cached:
+        return _skip("No semantically-close cached answer.")
+
+    return {
+        "answer": cached.get("answer", ""),
+        "citations": cached.get("citations", []),
+        "retrieved_pages": cached.get("retrieved_pages", []),
+        "confidence": cached.get("confidence", 0.0),
+        "grounded": cached.get("grounded", False),
+        "cache_hit": True,
+        "routing_decision": "complete",
+        "messages": [AIMessage(content=cached.get("answer", ""))],
+        "pipeline_steps": [{
+            "node_name": "semantic_cache_lookup", "status": "completed",
+            "thinking": "Reused a semantically-close prior answer for this document.",
+            "result": "hit", "duration_ms": (time.time() - start) * 1000, "tokens_used": 0,
+        }],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ROUTING FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -928,9 +1132,10 @@ def _retrieval_route(state: PipelineState) -> str:
     return "hybrid_retrieval"
 
 
-def route_after_clarify(state: PipelineState) -> str:
-    """After clarification, route to the strategy-specific retrieval node."""
-    return _retrieval_route(state)
+def route_after_cache_lookup(state: PipelineState) -> str:
+    """Cache hit → END (already a complete, previously-grounded answer);
+    miss → the strategy-specific retrieval node, same as before this node existed."""
+    return END if state.get("cache_hit") else _retrieval_route(state)
 
 
 def route_after_tree_search(state: PipelineState) -> str:
@@ -956,8 +1161,14 @@ def route_after_grounding(state: PipelineState) -> str:
     if decision == "retry":
         return "query_rewrite"
     if decision == "refuse":
-        return "insufficient_grounding"
+        return "web_search_fallback"
     return END
+
+
+def route_after_web_search_fallback(state: PipelineState) -> str:
+    """END if the web search actually produced an answer; otherwise fall
+    through to the same honest decline as if there were no fallback at all."""
+    return END if state.get("web_search_used") else "insufficient_grounding"
 
 
 def route_after_rewrite(state: PipelineState) -> str:
@@ -976,13 +1187,15 @@ def build_pipeline(checkpointer) -> StateGraph:
     """Build and compile the LangGraph pipeline.
 
     Flow:
-        START → guardrail ─┬─→ clarify ─(HITL pause?)→ [tree_search → page_retrieval | hybrid_retrieval]
-                           │                                   → rerank → grade_context ─┬─→ answer_generation
-                           │                                       (corrective-RAG)      └─(weak)→ query_rewrite ↺
+        START → guardrail ─┬─→ clarify ─(HITL pause?)→ semantic_cache_lookup ─(hit)→ END
+                           │                                   └─(miss)→ [tree_search → page_retrieval | hybrid_retrieval]
+                           │                                              → rerank → grade_context ─┬─→ answer_generation
+                           │                                                  (corrective-RAG)      └─(weak)→ query_rewrite ↺
                            └─→ out_of_scope → END
         answer_generation → grounding_check ─┬─→ END
                                              ├─(retry)→ query_rewrite ↺
-                                             └─(refuse)→ insufficient_grounding → END
+                                             └─(refuse)→ web_search_fallback ─┬─→ END (answered from web)
+                                                                              └─→ insufficient_grounding → END
     """
     workflow = StateGraph(PipelineState)
 
@@ -992,6 +1205,7 @@ def build_pipeline(checkpointer) -> StateGraph:
     workflow.add_node("blocked", _traced("blocked", blocked_node))
     workflow.add_node("guardrail", _traced("guardrail", guardrail_node))
     workflow.add_node("clarify", _traced("clarify", clarify_node))
+    workflow.add_node("semantic_cache_lookup", _traced("semantic_cache_lookup", semantic_cache_lookup_node))
     workflow.add_node("grade_context", _traced("grade_context", grade_context_node))
     workflow.add_node("tree_search", _traced("tree_search", tree_search_node))
     workflow.add_node("hybrid_retrieval", _traced("hybrid_retrieval", hybrid_retrieval_node))
@@ -1001,6 +1215,7 @@ def build_pipeline(checkpointer) -> StateGraph:
     workflow.add_node("grounding_check", _traced("grounding_check", grounding_check_node))
     workflow.add_node("query_rewrite", _traced("query_rewrite", query_rewrite_node))
     workflow.add_node("out_of_scope", _traced("out_of_scope", out_of_scope_node))
+    workflow.add_node("web_search_fallback", _traced("web_search_fallback", web_search_fallback_node))
     workflow.add_node("insufficient_grounding", _traced("insufficient_grounding", insufficient_grounding_node))
 
     # Entry: query understanding first, then safety check
@@ -1020,11 +1235,14 @@ def build_pipeline(checkpointer) -> StateGraph:
         {"clarify": "clarify", "out_of_scope": "out_of_scope"},
     )
 
-    # Clarify → strategy-specific retrieval (after optional HITL pause)
+    # Clarify → semantic cache lookup (after optional HITL pause), unconditional.
+    workflow.add_edge("clarify", "semantic_cache_lookup")
+
+    # Cache hit → END; miss → strategy-specific retrieval, same as before this node existed.
     workflow.add_conditional_edges(
-        "clarify",
-        route_after_clarify,
-        {"tree_search": "tree_search", "hybrid_retrieval": "hybrid_retrieval"},
+        "semantic_cache_lookup",
+        route_after_cache_lookup,
+        {"tree_search": "tree_search", "hybrid_retrieval": "hybrid_retrieval", END: END},
     )
 
     workflow.add_edge("out_of_scope", END)
@@ -1056,9 +1274,15 @@ def build_pipeline(checkpointer) -> StateGraph:
         route_after_grounding,
         {
             "query_rewrite": "query_rewrite",
-            "insufficient_grounding": "insufficient_grounding",
+            "web_search_fallback": "web_search_fallback",
             END: END,
         },
+    )
+
+    workflow.add_conditional_edges(
+        "web_search_fallback",
+        route_after_web_search_fallback,
+        {"insufficient_grounding": "insufficient_grounding", END: END},
     )
 
     workflow.add_edge("insufficient_grounding", END)
@@ -1135,10 +1359,44 @@ def _format_result(result, *, query, active_strategy, model_used, bundle, thread
     retrieved_page_numbers = sorted({
         p["page_number"] for p in retrieved_pages if p.get("page_number") is not None
     })
+    # Rank-preserving (first-occurrence order, not sorted) — retrieved_page_numbers
+    # above discards retrieval order, so MRR/nDCG (which need "how early was the
+    # first/each relevant hit") have to be computed from this instead.
+    ranked_page_numbers = list(dict.fromkeys(
+        p["page_number"] for p in retrieved_pages if p.get("page_number") is not None
+    ))
     routing = result.get("routing_decision", "")
     answer = result.get("answer", "")
     if settings.pii_redaction_enabled:
         answer, _pii_found = redact_pii(answer)
+
+    # Per-request layer diagnostics: the retrieval and generation fields already
+    # exist below, just scattered across one flat dict — this groups them so
+    # "was this a retrieval problem or a generation problem" is answerable from
+    # a single response without cross-referencing pipeline_steps by hand. The
+    # offline analog is evals/attribution.py's classify_case(), which needs
+    # expected_pages (ground truth) this doesn't have — a live query has no
+    # known-correct answer to check recall/precision against, so this reports
+    # what's actually knowable per-request instead of faking a recall number.
+    diagnostics = {
+        "retrieval": {
+            "strategy": active_strategy,
+            "candidates_before_rerank": len(result.get("hybrid_results", [])),
+            "candidates_after_rerank": len(retrieved_pages),
+            "pages_retrieved": ranked_page_numbers,
+            "retrieval_attempts": result.get("retrieval_attempts", 0),
+            "parent_expanded": any(p.get("child_text") for p in retrieved_pages),
+            "cache_hit": result.get("cache_hit", False),
+        },
+        "generation": {
+            "confidence": result.get("confidence", 0.0),
+            "grounded": result.get("grounded", False),
+            "unsupported_claim_count": len(result.get("unsupported_claims", [])),
+            "web_search_used": result.get("web_search_used", False),
+            "model_used": model_used,
+            "total_tokens": total_tokens,
+        },
+    }
     return {
         "query": query,
         "answer": answer,
@@ -1154,6 +1412,7 @@ def _format_result(result, *, query, active_strategy, model_used, bundle, thread
         "total_duration_ms": total_duration,
         "retrieval_context": retrieval_context,
         "retrieved_page_numbers": retrieved_page_numbers,
+        "ranked_page_numbers": ranked_page_numbers,
         "out_of_scope": routing == "out_of_scope",
         "blocked": routing == "blocked",
         "grounded": result.get("grounded", False),
@@ -1165,6 +1424,7 @@ def _format_result(result, *, query, active_strategy, model_used, bundle, thread
         "indexed_at": getattr(bundle, "indexed_at", None) if bundle else None,
         "interrupted": False,
         "clarification": None,
+        "diagnostics": diagnostics,
     }
 
 
@@ -1189,6 +1449,7 @@ async def ask(
     tenant_id: str | None = None,
     doc_id: str | None = None,
     thread_id: str | None = None,
+    metadata_filter: dict | None = None,
 ) -> dict:
     """Execute the full pipeline for a question.
 
@@ -1198,6 +1459,8 @@ async def ask(
         model_provider: Override model provider (openai/azure_openai/...).
         tenant_id / doc_id: Select which document bundle to answer from.
         thread_id: Durable-execution thread id (for resume/replay); auto if omitted.
+        metadata_filter: Restrict retrieval to chunks matching this metadata
+            (hybrid/bm25_only/vector_only strategies only — PageIndex is vectorless).
 
     Returns:
         Complete response dict with answer, citations, pipeline_steps, etc.
@@ -1223,6 +1486,7 @@ async def ask(
         "messages": [HumanMessage(content=query)],
         "original_query": query,
         "rewritten_query": None,
+        "metadata_filter": metadata_filter,
         "clarified": False,
         "clarification": "",
         "context_grade": 0.0,
@@ -1326,6 +1590,7 @@ async def ask_streaming(
     tenant_id: str | None = None,
     doc_id: str | None = None,
     thread_id: str | None = None,
+    metadata_filter: dict | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute the pipeline with streaming events for SSE.
 
@@ -1347,6 +1612,7 @@ async def ask_streaming(
         "messages": [HumanMessage(content=query)],
         "original_query": query,
         "rewritten_query": None,
+        "metadata_filter": metadata_filter,
         "clarified": False,
         "clarification": "",
         "context_grade": 0.0,

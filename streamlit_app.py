@@ -19,6 +19,7 @@ import streamlit as st
 # ═══════════════════════════════════════════════════════════════
 
 API_BASE = "http://localhost:8001/api"
+EVALS_RESULTS_DIR = Path("evals/results")
 
 STRATEGY_OPTIONS = {
     "PageIndex (Tree)": "pageindex",
@@ -442,6 +443,62 @@ def render_page_viewer():
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Retrieval Quality Tab — real golden-set benchmark, not simulated
+# ═══════════════════════════════════════════════════════════════
+
+
+def render_retrieval_quality():
+    """Retrieval-quality dashboard backed by evals/benchmark.py's real output.
+
+    Reads evals/results/benchmark.json directly (same file-read pattern as the
+    sidebar's PDF discovery below) rather than fabricating numbers: if the
+    benchmark hasn't been run yet, this says so instead of showing anything.
+    """
+    st.subheader("📊 Retrieval Quality")
+
+    results_path = EVALS_RESULTS_DIR / "benchmark.json"
+    if not results_path.exists():
+        st.info(
+            "No benchmark results yet. Index a document, then run "
+            "`python -m evals.benchmark` to generate real recall/precision/"
+            "grounding numbers from the golden set — nothing is shown here "
+            "until that produces real output."
+        )
+        return
+
+    rows = json.loads(results_path.read_text(encoding="utf-8"))
+    st.caption(f"From `{results_path}` — golden-set benchmark output, not simulated.")
+
+    for row in rows:
+        if "error" in row:
+            st.error(f"**{row['strategy']}**: {row['error']}")
+            continue
+        st.markdown(f"**{row['strategy']}**")
+        cols = st.columns(4)
+        cols[0].metric("Page Recall", f"{row['page_recall']:.0%}")
+        cols[1].metric("Page Precision", f"{row['page_precision']:.0%}")
+        cols[2].metric("Hit Rate", f"{row.get('hit_rate', 0):.0%}")
+        cols[3].metric("MRR", f"{row.get('mrr', 0):.2f}")
+        cols = st.columns(4)
+        cols[0].metric("nDCG", f"{row.get('ndcg', 0):.2f}")
+        cols[1].metric("Grounded Rate", f"{row['grounded_rate']:.0%}")
+        cols[2].metric("Out-of-Scope Acc.", f"{row['out_of_scope_accuracy']:.0%}")
+        cols[3].metric("Avg Latency", f"{row['avg_latency_ms']:.0f}ms")
+
+        attr = row.get("attribution")
+        if attr:
+            st.caption(
+                "Retrieval-vs-generation: "
+                + ", ".join(f"{k}={v}" for k, v in attr.items() if v)
+            )
+
+    md_path = EVALS_RESULTS_DIR / "benchmark.md"
+    if md_path.exists():
+        with st.expander("Raw benchmark.md"):
+            st.markdown(md_path.read_text(encoding="utf-8"))
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Main App
 # ═══════════════════════════════════════════════════════════════
 
@@ -451,8 +508,8 @@ def main():
     strategy, model = render_sidebar()
 
     # Main tabs
-    tab_chat, tab_tree, tab_pages, tab_config = st.tabs([
-        "💬 Chat", "🌳 Tree Explorer", "📄 Page Viewer", "⚙️ System Config"
+    tab_chat, tab_tree, tab_pages, tab_quality, tab_config = st.tabs([
+        "💬 Chat", "🌳 Tree Explorer", "📄 Page Viewer", "📊 Retrieval Quality", "⚙️ System Config"
     ])
 
     with tab_chat:
@@ -463,6 +520,9 @@ def main():
 
     with tab_pages:
         render_page_viewer()
+
+    with tab_quality:
+        render_retrieval_quality()
 
     with tab_config:
         render_system_config()

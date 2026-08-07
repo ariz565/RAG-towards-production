@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class Doc:
     id: str
     text: str
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -31,6 +32,14 @@ class RetrievedDoc:
     score: float
     rank: int = 0
     source: str = ""
+    metadata: dict = field(default_factory=dict)
+
+
+def matches_filter(metadata: dict, filter_metadata: dict | None) -> bool:
+    """AND match: every key in filter_metadata must be present and equal in metadata."""
+    if not filter_metadata:
+        return True
+    return all(metadata.get(k) == v for k, v in filter_metadata.items())
 
 
 class Retriever(ABC):
@@ -39,7 +48,7 @@ class Retriever(ABC):
         ...
 
     @abstractmethod
-    def search(self, query: str, k: int = 10) -> list[RetrievedDoc]:
+    def search(self, query: str, k: int = 10, filter_metadata: dict | None = None) -> list[RetrievedDoc]:
         ...
 
 

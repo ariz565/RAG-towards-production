@@ -33,13 +33,13 @@ class RetrievalPipeline:
         self.prefetch = prefetch
         self.rrf_k = rrf_k
 
-    def search(self, query: str) -> list[RetrievedDoc]:
+    def search(self, query: str, filter_metadata: dict | None = None) -> list[RetrievedDoc]:
         queries = self.transform.transform(query) if self.transform else [query]
 
         by_id: dict[str, RetrievedDoc] = {}
         ranked_lists: list[list[str]] = []
         for q in queries:
-            results = self.retriever.search(q, self.prefetch)
+            results = self.retriever.search(q, self.prefetch, filter_metadata)
             ranked_lists.append([r.id for r in results])
             for r in results:
                 by_id.setdefault(r.id, r)

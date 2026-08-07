@@ -39,6 +39,10 @@ htmlcov/
 
 # ── Runtime data artifacts (indexes, vectors, state, uploads) ─
 data/pdf/*
+# Eval-corpus fixture (evals/golden_set.jsonl is written against this document)
+# — a committed asset, not user-uploaded runtime content, same reasoning as
+# checking in evals/golden_set.jsonl itself.
+!data/pdf/vision-architecture.pdf
 data/chunks/*
 data/index/*
 data/bm25/*

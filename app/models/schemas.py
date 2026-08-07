@@ -51,6 +51,11 @@ class AskRequest(BaseModel):
         default=None,
         description="ISO date — answer from the version effective on/before this date.",
     )
+    metadata_filter: dict | None = Field(
+        default=None,
+        description="Restrict retrieval to chunks whose metadata matches every key/value "
+                    "given, e.g. {\"source\": \"policy.pdf\"}. hybrid/bm25_only/vector_only only.",
+    )
 
 # Resume an interrupted (HITL) run with the user's clarification answer.
 class ResumeRequest(BaseModel):
@@ -198,6 +203,12 @@ class AskResponse(BaseModel):
         default_factory=list,
         description="Distinct page numbers used as grounding for the answer.",
     )
+    ranked_page_numbers: list[int] = Field(
+        default_factory=list,
+        description="Same pages, in retrieval-rank order (first-occurrence, not "
+                    "sorted) — needed to compute MRR/nDCG, which retrieved_page_numbers' "
+                    "sorted set discards.",
+    )
     out_of_scope: bool = Field(
         default=False,
         description="True if the question was routed out of scope by the guardrail.",
@@ -239,6 +250,17 @@ class AskResponse(BaseModel):
     clarification: dict | None = Field(
         default=None,
         description="Clarification request when interrupted: {type, question, original_query}.",
+    )
+    diagnostics: dict | None = Field(
+        default=None,
+        description="Per-request retrieval-vs-generation observability: {retrieval: "
+                    "{strategy, candidates_before_rerank, candidates_after_rerank, "
+                    "pages_retrieved, retrieval_attempts, parent_expanded, cache_hit}, "
+                    "generation: {confidence, grounded, unsupported_claim_count, "
+                    "web_search_used, model_used, total_tokens}}. No ground truth exists "
+                    "for a live query, so this reports what's knowable per-request rather "
+                    "than a recall/precision number — see evals/attribution.py for the "
+                    "ground-truth version used against the golden set.",
     )
 
 # A node in the document tree for the tree explorer UI.

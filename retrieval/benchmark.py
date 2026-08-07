@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from retrieval.base import mrr, ndcg_at_k, recall_at_k
+from retrieval.base import hit_at_k, mrr, ndcg_at_k, recall_at_k
 from retrieval.factory import get_reranker, get_retriever
 from retrieval.pipeline import RetrievalPipeline
 from retrieval.sample_data import CORPUS, QRELS
@@ -30,14 +30,16 @@ CONFIGS = [
 
 
 def _evaluate(pipeline: RetrievalPipeline, k: int) -> dict:
-    recalls, ndcgs, mrrs = [], [], []
+    recalls, ndcgs, mrrs, hits = [], [], [], []
     for query, relevant in QRELS:
         ids = [r.id for r in pipeline.search(query)]
         recalls.append(recall_at_k(ids, relevant, k))
         ndcgs.append(ndcg_at_k(ids, relevant, k))
         mrrs.append(mrr(ids, relevant))
+        hits.append(hit_at_k(ids, relevant, k))
     n = len(QRELS)
     return {
+        f"hit_rate@{k}": round(sum(hits) / n, 3),
         f"recall@{k}": round(sum(recalls) / n, 3),
         f"ndcg@{k}": round(sum(ndcgs) / n, 3),
         "mrr": round(sum(mrrs) / n, 3),

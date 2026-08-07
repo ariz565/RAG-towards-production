@@ -127,12 +127,11 @@ class JobStore:
         if self._use_db:
             try:
                 async with aiosqlite.connect(str(self.db_path)) as db:
-                    async with db.execute(
+                    row = await db.execute_fetchone(
                         "SELECT kind, tenant_id, status, result, error, created_at, updated_at "
                         "FROM jobs WHERE job_id = ?",
                         (job_id,),
-                    ) as cursor:
-                        row = await cursor.fetchone()
+                    )
                     if row:
                         kind, tenant_id, status, result, error, created_at, updated_at = row
                         return Job(

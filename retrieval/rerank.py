@@ -34,7 +34,7 @@ class Reranker(ABC):
         out = []
         for rank, i in enumerate(order[:top_k]):
             d = docs[i]
-            out.append(RetrievedDoc(d.id, d.text, float(scores[i]), rank + 1, f"{d.source}+rerank"))
+            out.append(RetrievedDoc(d.id, d.text, float(scores[i]), rank + 1, f"{d.source}+rerank", d.metadata))
         return out
 
 

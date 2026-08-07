@@ -12,9 +12,10 @@ Startup sequence:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import uvicorn
@@ -24,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers.ask import router
 from app.routers.auth import router as auth_router
+from app.routers.evals import router as evals_router
 from app.routers.governance import router as governance_router
 from app.routers.second_brain import router as second_brain_router
 from app.services.audit import audit_store
@@ -110,7 +112,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Audit store backend failed to initialize; falling back if available")
 
+    reindex_task = None
+    if settings.auto_reindex_enabled:
+        from app.services.reindex_watcher import watch_loop
+
+        reindex_task = asyncio.create_task(watch_loop())
+        logger.info(f"Auto-reindex watcher started (every {settings.auto_reindex_interval_seconds}s)")
+
     yield  # Application runs
+
+    if reindex_task:
+        reindex_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await reindex_task
 
     await audit_store.close()
     await version_store.close()
@@ -141,6 +155,7 @@ app.include_router(auth_router)
 app.include_router(router)
 app.include_router(governance_router)
 app.include_router(second_brain_router)
+app.include_router(evals_router)
 
 
 # ── Entry Point ─────────────────────────────────────────────────────

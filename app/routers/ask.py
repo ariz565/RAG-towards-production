@@ -286,7 +286,8 @@ async def ask_question(
     _check_strategy_ready(bundle, request.strategy or settings.active_retrieval.value)
     result = await ask(
         search_query, strategy=request.strategy, model_provider=request.model_provider,
-        tenant_id=tenant, doc_id=doc_id, thread_id=request.thread_id
+        tenant_id=tenant, doc_id=doc_id, thread_id=request.thread_id,
+        metadata_filter=request.metadata_filter,
     )
     result["query"] = request.query                 # echo the user's original
     result["query_intent"] = analysis.intent
@@ -318,7 +319,8 @@ async def ask_question_stream(
     async def event_generator():
         async for event in ask_streaming(
             search_query, strategy=request.strategy, model_provider=request.model_provider,
-            tenant_id=tenant, doc_id=doc_id, thread_id=request.thread_id
+            tenant_id=tenant, doc_id=doc_id, thread_id=request.thread_id,
+            metadata_filter=request.metadata_filter,
         ):
             yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
 
@@ -411,18 +413,6 @@ async def list_documents(principal: Principal = Depends(get_principal_optional))
     tenant = _tenant_for(principal, None)
     docs = [d for d in registry.list() if d["tenant_id"] == tenant]
     return {"tenant_id": tenant, "documents": docs}
-
-
-@router.delete("/documents")
-async def delete_documents(principal: Principal = Depends(get_principal)):
-    tenant = principal.tenant_id
-    try:
-        deleted = await registry.delete_tenant(tenant)
-        get_storage().delete_tenant_data(tenant)
-        return {"success": True, "message": f"Deleted {deleted} documents and associated data.", "deleted_count": deleted}
-    except Exception as e:
-        logger.exception("Deletion failed")
-        raise HTTPException(500, f"Deletion failed: {e}")
 
 
 # ── Config ───────────────────────────────────────────────────────────
